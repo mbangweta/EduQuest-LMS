@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { requireUser, supabaseService } from '@/lib/api-helpers'
 import { notifySupabase } from '@/lib/notify-supabase'
+import { PERSONAL_MAX_LEARNERS } from '@/lib/auth-supabase'
 
 // GET /api/classes/[id]/members — list the learners in a class.
 // Used by the report-card pickers (teacher + school admin).
@@ -71,6 +72,27 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
         if (!tca) return NextResponse.json({ error: 'Forbidden — you are not assigned to this class' }, { status: 403 })
       } else {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      }
+    }
+
+    // Personal-account limit: max 10 learners total across all their classes
+    if (user.institutionType === 'PERSONAL') {
+      // Sum members across all classes this teacher owns
+      const { data: myClasses } = await sb.from('classes')
+        .select('id').eq('teacher_id', user.id)
+      const myClassIds = (myClasses || []).map((c: any) => c.id)
+      let totalMembers = 0
+      if (myClassIds.length > 0) {
+        const { count } = await sb.from('class_members')
+          .select('id', { count: 'exact', head: true })
+          .in('class_id', myClassIds)
+        totalMembers = count ?? 0
+      }
+      if (totalMembers >= PERSONAL_MAX_LEARNERS) {
+        return NextResponse.json(
+          { error: `Individual teacher accounts are limited to ${PERSONAL_MAX_LEARNERS} learners in total. You already have ${totalMembers}. Upgrade to a School account to enrol more.` },
+          { status: 403 },
+        )
       }
     }
     const body = await req.json().catch(() => ({}))

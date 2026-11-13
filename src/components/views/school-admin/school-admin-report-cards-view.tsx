@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { toast } from 'sonner'
-import { Printer, GraduationCap } from 'lucide-react'
+import { Printer, GraduationCap, Download, Loader2 } from 'lucide-react'
 import { api } from '@/lib/api-client'
 
 import { Button } from '@/components/ui/button'
@@ -23,6 +23,9 @@ export function SchoolAdminReportCardsView() {
   const [report, setReport] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [fetching, setFetching] = useState(false)
+  const [classReports, setClassReports] = useState<any[] | null>(null)
+  const [buildingClass, setBuildingClass] = useState(false)
+  const printingClassRef = useRef(false)
 
   useEffect(() => {
     api.get<{ classes: any[] }>('/api/classes')
@@ -59,22 +62,77 @@ export function SchoolAdminReportCardsView() {
       .finally(() => setFetching(false))
   }, [learnerId, term])
 
+  useEffect(() => {
+    if (classReports && classReports.length > 0 && !printingClassRef.current) {
+      printingClassRef.current = true
+      const t = setTimeout(() => {
+        window.print()
+        setTimeout(() => { printingClassRef.current = false }, 1000)
+      }, 350)
+      return () => clearTimeout(t)
+    }
+  }, [classReports])
+
+  async function buildClassPdfs() {
+    if (!learners.length || !classId) {
+      toast.error('Select a class with learners first')
+      return
+    }
+    setBuildingClass(true)
+    setClassReports(null)
+    try {
+      const params = new URLSearchParams()
+      if (term !== 'ALL') params.set('term', term)
+      const qs = params.size ? `?${params.toString()}` : ''
+      const reports: any[] = []
+      for (const l of learners) {
+        try {
+          const r = await api.get<any>(`/api/report-cards/${l.id}${qs}`)
+          if (r && r.subjects && r.subjects.length > 0) reports.push(r)
+        } catch (e) {
+          // skip
+        }
+      }
+      if (reports.length === 0) {
+        toast.error('No report cards could be built — no published scores found for any learner in this class.')
+        return
+      }
+      setClassReports(reports)
+      toast.success(`Prepared ${reports.length} report card${reports.length === 1 ? '' : 's'} — use "Save as PDF" in the print dialog.`)
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to build class PDFs')
+    } finally {
+      setBuildingClass(false)
+    }
+  }
+
   if (loading) return <div className="p-6 space-y-3"><Skeleton className="h-12" /><Skeleton className="h-96" /></div>
 
   return (
-    <div className="p-4 lg:p-6 space-y-4">
+    <div className="p-4 lg:p-6 space-y-4 print:hidden-when-class-pdf">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold">Report Cards</h1>
           <p className="text-sm text-muted-foreground">
-            Generate official report cards for any learner in your school.
+            Generate official report cards for any learner in your school. Marks auto-sync from the Mark Schedule.
           </p>
         </div>
-        {report && (
-          <Button variant="outline" onClick={() => window.print()}>
-            <Printer className="mr-2 h-4 w-4" /> Print
-          </Button>
-        )}
+        <div className="flex gap-2 flex-wrap">
+          {report && (
+            <Button variant="outline" onClick={() => window.print()}>
+              <Printer className="mr-2 h-4 w-4" /> Print / PDF (this learner)
+            </Button>
+          )}
+          {learners.length > 0 && (
+            <Button variant="outline" onClick={buildClassPdfs} disabled={buildingClass || fetching}>
+              {buildingClass ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Building…</>
+              ) : (
+                <><Download className="mr-2 h-4 w-4" /> Class PDFs ({learners.length})</>
+              )}
+            </Button>
+          )}
+        </div>
       </div>
 
       <Card>
@@ -112,10 +170,39 @@ export function SchoolAdminReportCardsView() {
       ) : fetching ? (
         <Skeleton className="h-96" />
       ) : (
-        <div className="print:p-0">
+        <div className="print:p-0 print:block">
           <ReportCardDocument report={report} />
         </div>
       )}
+
+      {classReports && classReports.length > 0 && (
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute',
+            left: '-9999px',
+            top: 0,
+            width: '794px',
+          }}
+          className="class-pdf-print-container"
+        >
+          {classReports.map((r, i) => (
+            <ReportCardDocument key={i} report={r} />
+          ))}
+        </div>
+      )}
+
+      <style jsx global>{`
+        @media print {
+          .print\\:hidden-when-class-pdf { display: none !important; }
+          .class-pdf-print-container {
+            position: static !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: auto !important;
+          }
+        }
+      `}</style>
     </div>
   )
 }

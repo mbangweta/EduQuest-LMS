@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { requireUser, supabaseService, generateClassCode } from '@/lib/api-helpers'
+import { PERSONAL_MAX_CLASSES } from '@/lib/auth-supabase'
 
 // Format a class row + counts for the API response (preserves Prisma shape).
 async function formatClassRow(sb: ReturnType<typeof supabaseService>, c: any) {
@@ -81,6 +82,19 @@ export async function POST(req: Request) {
   try {
     const user = await requireUser(['TEACHER', 'ADMIN', 'SUPER_USER', 'SCHOOL_ADMIN'])
     const sb = supabaseService()
+
+    // Personal-account limit: max 3 classes total
+    if (user.institutionType === 'PERSONAL') {
+      const { count } = await sb.from('classes')
+        .select('id', { count: 'exact', head: true })
+        .eq('teacher_id', user.id)
+      if ((count ?? 0) >= PERSONAL_MAX_CLASSES) {
+        return NextResponse.json(
+          { error: `Individual teacher accounts are limited to ${PERSONAL_MAX_CLASSES} classes. You already have ${count}. Upgrade to a School account to create more.` },
+          { status: 403 },
+        )
+      }
+    }
 
     const body = await req.json().catch(() => ({}))
     const { name, grade, subjectId, description } = body

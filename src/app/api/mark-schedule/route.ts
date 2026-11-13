@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { requireUser, supabaseService } from '@/lib/api-helpers'
-import { normalizeTo150, gradeForScore, STANDARD_SUBJECTS } from '@/lib/assessment-utils'
+import {
+  normalizeTo150, gradeForScore, STANDARD_SUBJECTS, computeTermTotal,
+} from '@/lib/assessment-utils'
 
 // ============================================================================
 // GET /api/mark-schedule?classId=...&term=...&grade=...
@@ -34,6 +36,13 @@ import { normalizeTo150, gradeForScore, STANDARD_SUBJECTS } from '@/lib/assessme
 export async function GET(req: Request) {
   try {
     const user = await requireUser(['SUPER_USER', 'SCHOOL_ADMIN', 'TEACHER'])
+    // Personal (individual teacher) accounts don't get Mark Schedule access.
+    if (user.institutionType === 'PERSONAL') {
+      return NextResponse.json(
+        { error: 'Mark Schedule is not available for individual teacher accounts. Upgrade to a School account to access this feature.' },
+        { status: 403 },
+      )
+    }
     const sb = supabaseService()
     const url = new URL(req.url)
     const classId = url.searchParams.get('classId')
@@ -204,33 +213,53 @@ export async function GET(req: Request) {
 
     const rows = roster.map((learner: any) => {
       const scoresBySubject: Record<string, number | null> = {}
-      let totalNormalized = 0
-      let recorded = 0
+      // Per-subject normalized score (out of 150), used for term-total calc
+      const normalizedByCode: Array<{ code: string; score: number | null }> = []
 
       for (const std of STANDARD_SUBJECTS) {
         const aInfo = assessmentByCode.get(std.code)
         if (!aInfo) {
           scoresBySubject[std.code] = null
+          normalizedByCode.push({ code: std.code, score: null })
           continue
         }
         const inner = scoreByAssessmentLearner.get(aInfo.id)
         const raw = inner?.get(learner.id) ?? null
         scoresBySubject[std.code] = raw
         if (raw !== null) {
-          const norm = normalizeTo150(raw, aInfo.maxScore)
-          totalNormalized += norm
-          recorded += 1
+          normalizedByCode.push({
+            code: std.code,
+            score: normalizeTo150(raw, aInfo.maxScore),
+          })
+        } else {
+          normalizedByCode.push({ code: std.code, score: null })
         }
       }
 
-      const averageScore = recorded > 0 ? Math.round(totalNormalized / recorded) : null
+      // Grade-based term total (Zambia spec):
+      //   Grades 6-7: SP1 + SP2 + best 4 from remaining 8
+      //   Grades 5-:  MATH + ENG + SCI + SS + best 2 from remaining 6
+      const gradeNum = learner.grade ?? classGrade ?? 5
+      const termTotalResult = computeTermTotal(gradeNum, normalizedByCode)
+      const termTotal = termTotalResult.termTotal
+
+      // Average = termTotal / number of selected subjects (still on /150 scale)
+      const selectedCount = termTotalResult.selectedSubjects.length
+      const averageScore = selectedCount > 0 ? Math.round(termTotal / selectedCount) : null
+
       return {
         learner: {
           id: learner.id, name: learner.name, email: learner.email, avatarColor: learner.avatar_color,
         },
         scoresBySubject,
-        recordedCount: recorded,
-        total: recorded > 0 ? totalNormalized : null,
+        // Raw scores shown in cells; termTotal uses normalized scores per the spec
+        recordedCount: normalizedByCode.filter((s) => s.score !== null).length,
+        total: termTotal,
+        termTotalBreakdown: {
+          rule: termTotalResult.rule,
+          selected: termTotalResult.selectedSubjects,
+          dropped: termTotalResult.droppedSubjects,
+        },
         averageScore,
         grade: gradeForScore(averageScore),
       }

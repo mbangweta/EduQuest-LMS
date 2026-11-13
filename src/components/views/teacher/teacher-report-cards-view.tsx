@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { toast } from 'sonner'
-import { Printer, GraduationCap } from 'lucide-react'
+import { Printer, GraduationCap, Download, FileText, Loader2 } from 'lucide-react'
 import { api } from '@/lib/api-client'
 
 import { Button } from '@/components/ui/button'
@@ -23,6 +23,11 @@ export function TeacherReportCardsView() {
   const [report, setReport] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [fetching, setFetching] = useState(false)
+  // Class PDFs: when non-null, we render every learner's report card in a
+  // hidden container and the user can print-to-PDF (one A4 page each).
+  const [classReports, setClassReports] = useState<any[] | null>(null)
+  const [buildingClass, setBuildingClass] = useState(false)
+  const printingClassRef = useRef(false)
 
   useEffect(() => {
     api.get<{ classes: any[] }>('/api/classes')
@@ -59,22 +64,84 @@ export function TeacherReportCardsView() {
       .finally(() => setFetching(false))
   }, [learnerId, term])
 
+  // When classReports is populated, automatically trigger print (once).
+  useEffect(() => {
+    if (classReports && classReports.length > 0 && !printingClassRef.current) {
+      printingClassRef.current = true
+      // Small delay so React finishes rendering all the report cards before
+      // the browser snapshots the page for printing.
+      const t = setTimeout(() => {
+        window.print()
+        // Allow re-printing after the user closes the print dialog.
+        setTimeout(() => { printingClassRef.current = false }, 1000)
+      }, 350)
+      return () => clearTimeout(t)
+    }
+  }, [classReports])
+
+  async function buildClassPdfs() {
+    if (!learners.length || !classId) {
+      toast.error('Select a class with learners first')
+      return
+    }
+    setBuildingClass(true)
+    setClassReports(null)
+    try {
+      const params = new URLSearchParams()
+      if (term !== 'ALL') params.set('term', term)
+      const qs = params.size ? `?${params.toString()}` : ''
+      // Sequential to keep DB load reasonable; classes are typically <50 learners.
+      const reports: any[] = []
+      for (const l of learners) {
+        try {
+          const r = await api.get<any>(`/api/report-cards/${l.id}${qs}`)
+          if (r && r.subjects && r.subjects.length > 0) reports.push(r)
+        } catch (e) {
+          // Skip learners whose report couldn't be built (e.g. no scores)
+        }
+      }
+      if (reports.length === 0) {
+        toast.error('No report cards could be built — no published scores found for any learner in this class.')
+        return
+      }
+      setClassReports(reports)
+      toast.success(`Prepared ${reports.length} report card${reports.length === 1 ? '' : 's'} — use "Save as PDF" in the print dialog.`)
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to build class PDFs')
+    } finally {
+      setBuildingClass(false)
+    }
+  }
+
   if (loading) return <div className="p-6 space-y-3"><Skeleton className="h-12" /><Skeleton className="h-96" /></div>
 
+  const selectedClass = classes.find((c) => c.id === classId)
+
   return (
-    <div className="p-4 lg:p-6 space-y-4">
+    <div className="p-4 lg:p-6 space-y-4 print:hidden-when-class-pdf">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold">Report Cards</h1>
           <p className="text-sm text-muted-foreground">
-            Generate official report cards for your learners.
+            Generate official report cards for your learners. Marks auto-sync from the Mark Schedule.
           </p>
         </div>
-        {report && (
-          <Button variant="outline" onClick={() => window.print()}>
-            <Printer className="mr-2 h-4 w-4" /> Print
-          </Button>
-        )}
+        <div className="flex gap-2 flex-wrap">
+          {report && (
+            <Button variant="outline" onClick={() => window.print()}>
+              <Printer className="mr-2 h-4 w-4" /> Print / PDF (this learner)
+            </Button>
+          )}
+          {learners.length > 0 && (
+            <Button variant="outline" onClick={buildClassPdfs} disabled={buildingClass || fetching}>
+              {buildingClass ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Building…</>
+              ) : (
+                <><Download className="mr-2 h-4 w-4" /> Class PDFs ({learners.length})</>
+              )}
+            </Button>
+          )}
+        </div>
       </div>
 
       <Card>
@@ -112,10 +179,48 @@ export function TeacherReportCardsView() {
       ) : fetching ? (
         <Skeleton className="h-96" />
       ) : (
-        <div className="print:p-0">
+        <div className="print:p-0 print:block">
           <ReportCardDocument report={report} />
         </div>
       )}
+
+      {/* Print-only container for class PDFs — hidden on screen, visible when printing.
+          Each ReportCardDocument has page-break-after:always in its own <style jsx> so
+          the browser will put each learner on a separate A4 page. */}
+      {classReports && classReports.length > 0 && (
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute',
+            left: '-9999px',
+            top: 0,
+            width: '794px',
+          }}
+          className="class-pdf-print-container"
+        >
+          {classReports.map((r, i) => (
+            <ReportCardDocument key={i} report={r} />
+          ))}
+        </div>
+      )}
+
+      {/* Print stylesheet: when the class PDF container is present, hide the
+          rest of the page (the screen UI) and show only the report cards. */}
+      <style jsx global>{`
+        @media print {
+          /* Default: hide elements tagged with .print:hidden-when-class-pdf.
+             Tailwind's "print:" variant is also used above on the wrapping div. */
+          .print\\:hidden-when-class-pdf { display: none !important; }
+          /* When the class PDF container is in the DOM, force it visible and
+             absolute-positioned at the top-left of the page. */
+          .class-pdf-print-container {
+            position: static !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: auto !important;
+          }
+        }
+      `}</style>
     </div>
   )
 }

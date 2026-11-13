@@ -37,8 +37,13 @@ export function formatAssessmentType(type: string | undefined | null): string {
 // ============================================================================
 // GRADING SCALE — raw scores out of 150 (no percentages)
 // ============================================================================
-// A (140-150) Excellent | B (130-139) Very Good | C (120-129) Good
-// D (100-119) Satisfactory | E (75-99) Fair | F (0-74) Needs Improvement
+// A (140-150) Excellent         | B (130-139) Very Good
+// C (120-129) Good              | D (100-119) Fair
+// E (75-99)   Average           | F (0-74)   Needs Improvement
+// ============================================================================
+// Remarks updated 2026-11-13 per school spec.
+// Note: D and E remarks differ from the older scale — D is now "Fair" (was
+// "Satisfactory") and E is now "Average" (was "Fair").
 // ============================================================================
 
 export const MAX_REPORT_SCORE = 150
@@ -47,10 +52,132 @@ export const GRADING_SCALE: Array<{ grade: string; min: number; max: number; ran
   { grade: 'A', min: 140, max: 150, range: '140-150', remark: 'Excellent' },
   { grade: 'B', min: 130, max: 139, range: '130-139', remark: 'Very Good' },
   { grade: 'C', min: 120, max: 129, range: '120-129', remark: 'Good' },
-  { grade: 'D', min: 100, max: 119, range: '100-119', remark: 'Satisfactory' },
-  { grade: 'E', min: 75,  max: 99,  range: '75-99',   remark: 'Fair' },
+  { grade: 'D', min: 100, max: 119, range: '100-119', remark: 'Fair' },
+  { grade: 'E', min: 75,  max: 99,  range: '75-99',   remark: 'Average' },
   { grade: 'F', min: 0,   max: 74,  range: '0-74',    remark: 'Needs Improvement' },
 ]
+
+// Remark for a letter grade — used by report cards.
+export function remarkForGrade(grade: string): string {
+  const found = GRADING_SCALE.find((g) => g.grade === grade)
+  return found?.remark || '—'
+}
+
+// ============================================================================
+// GRADE-BASED TERM TOTAL CALCULATION (Zambia primary school spec)
+// ----------------------------------------------------------------------------
+// The Term Total is computed differently depending on the learner's grade:
+//
+//   Grades 6 & 7:
+//     Term Total = SP1 + SP2 + best 4 scores from the remaining 8 subjects
+//     (compulsory: SP1, SP2 — even if low)
+//     (best 4 picked from: MATH, ENG, SCI, SS, ZL, TS, HE, EA)
+//
+//   Grades 5 and below:
+//     Term Total = MATH + ENG + SCI + SS + best 2 from the remaining 6 subjects
+//     (compulsory: MATH, ENG, SCI, SS — even if low)
+//     (best 2 picked from: ZL, SP1, SP2, TS, HE, EA)
+//
+// All scores are expected to be on the /150 normalized scale before being
+// passed in. Subjects with `null` score are excluded from "best N" selection
+// but compulsory subjects are ALWAYS included (with 0 if null).
+// ============================================================================
+
+export interface SubjectScoreForTotal {
+  code: string         // must match a STANDARD_SUBJECTS code (MATH, ENG, …)
+  score: number | null // normalized to /150; null = no score recorded
+}
+
+export interface TermTotalResult {
+  termTotal: number               // sum of compulsory + best N (out of 150 × selected subjects)
+  selectedSubjects: Array<{ code: string; score: number; compulsory: boolean }>
+  droppedSubjects: Array<{ code: string; score: number | null }>
+  rule: 'GRADE_6_7' | 'GRADE_5_BELOW'
+}
+
+export function computeTermTotal(
+  grade: number,
+  subjectScores: SubjectScoreForTotal[],
+): TermTotalResult {
+  const rule: 'GRADE_6_7' | 'GRADE_5_BELOW' = grade >= 6 ? 'GRADE_6_7' : 'GRADE_5_BELOW'
+
+  // Build a lookup: code → score (default to null if missing)
+  const scoreByCode = new Map<string, number | null>()
+  for (const s of subjectScores) {
+    scoreByCode.set(s.code.toUpperCase(), s.score)
+  }
+  // Ensure all 10 standard subjects are represented
+  for (const std of STANDARD_SUBJECTS) {
+    if (!scoreByCode.has(std.code)) scoreByCode.set(std.code, null)
+  }
+
+  const selected: Array<{ code: string; score: number; compulsory: boolean }> = []
+  const dropped: Array<{ code: string; score: number | null }> = []
+
+  if (rule === 'GRADE_6_7') {
+    // Compulsory: SP1, SP2
+    const compulsoryCodes = ['SP1', 'SP2']
+    // Best 4 from the rest
+    const optionalCodes = ['MATH', 'ENG', 'SCI', 'SS', 'ZL', 'TS', 'HE', 'EA']
+    const bestN = 4
+
+    for (const code of compulsoryCodes) {
+      const sc = scoreByCode.get(code) ?? null
+      selected.push({ code, score: sc ?? 0, compulsory: true })
+    }
+    // Pick best N from optional (only those with a non-null score)
+    const optionalScored = optionalCodes
+      .map((code) => ({ code, score: scoreByCode.get(code) ?? null }))
+      .filter((s) => s.score !== null) as Array<{ code: string; score: number }>
+    optionalScored.sort((a, b) => b.score - a.score)
+    const picked = new Set(optionalScored.slice(0, bestN).map((s) => s.code))
+    for (const s of optionalScored) {
+      if (picked.has(s.code)) {
+        selected.push({ code: s.code, score: s.score, compulsory: false })
+      } else {
+        dropped.push({ code: s.code, score: s.score })
+      }
+    }
+    // Optional subjects with no score recorded → dropped (null)
+    for (const code of optionalCodes) {
+      const sc = scoreByCode.get(code) ?? null
+      if (sc === null && !picked.has(code)) {
+        dropped.push({ code, score: null })
+      }
+    }
+  } else {
+    // GRADE_5_BELOW: Compulsory = MATH, ENG, SCI, SS; Best 2 from rest
+    const compulsoryCodes = ['MATH', 'ENG', 'SCI', 'SS']
+    const optionalCodes = ['ZL', 'SP1', 'SP2', 'TS', 'HE', 'EA']
+    const bestN = 2
+
+    for (const code of compulsoryCodes) {
+      const sc = scoreByCode.get(code) ?? null
+      selected.push({ code, score: sc ?? 0, compulsory: true })
+    }
+    const optionalScored = optionalCodes
+      .map((code) => ({ code, score: scoreByCode.get(code) ?? null }))
+      .filter((s) => s.score !== null) as Array<{ code: string; score: number }>
+    optionalScored.sort((a, b) => b.score - a.score)
+    const picked = new Set(optionalScored.slice(0, bestN).map((s) => s.code))
+    for (const s of optionalScored) {
+      if (picked.has(s.code)) {
+        selected.push({ code: s.code, score: s.score, compulsory: false })
+      } else {
+        dropped.push({ code: s.code, score: s.score })
+      }
+    }
+    for (const code of optionalCodes) {
+      const sc = scoreByCode.get(code) ?? null
+      if (sc === null && !picked.has(code)) {
+        dropped.push({ code, score: null })
+      }
+    }
+  }
+
+  const termTotal = selected.reduce((sum, s) => sum + s.score, 0)
+  return { termTotal, selectedSubjects: selected, droppedSubjects: dropped, rule }
+}
 
 export function gradeForScore(score: number | null): string {
   if (score === null) return '—'

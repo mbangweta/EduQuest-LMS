@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { ClipboardList, Printer, Award } from 'lucide-react'
+import { ClipboardList, Printer, Award, Sparkles, Loader2 } from 'lucide-react'
 import { api } from '@/lib/api-client'
 import { gradeColorClass } from '@/lib/assessment-utils'
 
@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/table'
 import { EmptyState } from '@/components/views/shared/empty-state'
 import { MarkSheetButtons } from '@/components/views/shared/mark-sheet-buttons'
+import { InlineScoreInput } from '@/components/views/shared/inline-score-input'
 
 export function SchoolAdminMarkSchedulesView() {
   const [classes, setClasses] = useState<any[]>([])
@@ -28,6 +29,7 @@ export function SchoolAdminMarkSchedulesView() {
   const [loading, setLoading] = useState(true)
   const [fetching, setFetching] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
+  const [initializing, setInitializing] = useState(false)
 
   useEffect(() => {
     api.get<{ classes: any[] }>('/api/classes')
@@ -66,6 +68,26 @@ export function SchoolAdminMarkSchedulesView() {
 
   const subjects: any[] = data?.subjects ?? []
   const rows: any[] = data?.rows ?? []
+  const selectedClass = classes.find((c) => c.id === classId)
+  const needsInitialization = subjects.length > 0 && subjects.some((s: any) => !s.assessmentId)
+  const activeTermForInit = term !== 'ALL' ? term : '1'
+
+  async function initializeMarkSchedule() {
+    if (!classId) return
+    setInitializing(true)
+    try {
+      const r = await api.post<any>('/api/mark-schedule/initialize', {
+        classId,
+        term: Number(activeTermForInit),
+      })
+      toast.success(`Mark schedule ready — ${r.createdCount} new assessment${r.createdCount === 1 ? '' : 's'} created, ${r.existingCount} already existed.`)
+      setReloadKey((k) => k + 1)
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to initialize mark schedule')
+    } finally {
+      setInitializing(false)
+    }
+  }
 
   return (
     <div className="p-4 lg:p-6 space-y-4">
@@ -134,6 +156,31 @@ export function SchoolAdminMarkSchedulesView() {
         <EmptyState icon={<ClipboardList className="h-6 w-6" />} title="No learners" description="This class has no enrolled learners." />
       ) : subjects.length === 0 ? (
         <EmptyState icon={<ClipboardList className="h-6 w-6" />} title="No subjects" description="No standard subjects found. Please contact an administrator." />
+      ) : needsInitialization ? (
+        <Card>
+          <CardContent className="p-6 space-y-3 text-center">
+            <div className="mx-auto w-fit">
+              <ClipboardList className="h-10 w-10 text-primary" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold">Start entering scores online</h2>
+              <p className="text-sm text-muted-foreground mt-1 max-w-md mx-auto">
+                No End-of-Term assessments exist for {selectedClass?.name} yet (term {activeTermForInit}).
+                Click below to create the 10 standard subject assessments — you can then
+                type scores directly into the grid below, or upload a mark sheet template.
+              </p>
+            </div>
+            <Button onClick={initializeMarkSchedule} disabled={initializing}>
+              {initializing
+                ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Creating…</>
+                : <><Sparkles className="mr-2 h-4 w-4" /> Initialize Mark Schedule</>}
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              Or use the &ldquo;Mark Sheet Template&rdquo; button above to download the Excel
+              template — uploading it also creates these assessments automatically.
+            </p>
+          </CardContent>
+        </Card>
       ) : (
         <Card>
           <CardContent className="p-0">
@@ -166,11 +213,35 @@ export function SchoolAdminMarkSchedulesView() {
                         <TableCell className="sticky left-10 bg-background z-10 font-medium">{r.learner.name}</TableCell>
                         {subjects.map((s) => {
                           const v = r.scoresBySubject?.[s.code] ?? null
+                          if (!s.assessmentId) {
+                            return (
+                              <TableCell key={s.code} className="text-center">
+                                <span className="text-muted-foreground">—</span>
+                              </TableCell>
+                            )
+                          }
                           return (
                             <TableCell key={s.code} className="text-center">
-                              {v === null || v === undefined ? <span className="text-muted-foreground">—</span> : (
-                                <span className={v / s.maxScore >= 0.5 ? 'text-foreground' : 'text-destructive'}>{v}</span>
-                              )}
+                              <InlineScoreInput
+                                learnerId={r.learner.id}
+                                learnerName={r.learner.name}
+                                assessmentId={s.assessmentId}
+                                maxScore={s.maxScore}
+                                initialScore={v}
+                                subjectCode={s.code}
+                                onSaved={(newScore) => {
+                                  setData((prev: any) => {
+                                    if (!prev) return prev
+                                    const newRows = (prev.rows || []).map((row: any) => {
+                                      if (row.learner.id !== r.learner.id) return row
+                                      const nextScores = { ...(row.scoresBySubject || {}), [s.code]: newScore }
+                                      return { ...row, scoresBySubject: nextScores }
+                                    })
+                                    return { ...prev, rows: newRows }
+                                  })
+                                  setTimeout(() => setReloadKey((k) => k + 1), 250)
+                                }}
+                              />
                             </TableCell>
                           )
                         })}

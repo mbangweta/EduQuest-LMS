@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { requireUser, supabaseService } from '@/lib/api-helpers'
-import { adminCreateUser, adminCreateUserFromName, DEFAULT_USER_PASSWORD } from '@/lib/auth-supabase'
+import { adminCreateUser, adminCreateUserFromName, DEFAULT_USER_PASSWORD, PERSONAL_MAX_LEARNERS } from '@/lib/auth-supabase'
 import * as XLSX from 'xlsx'
 
 // POST /api/classes/[id]/members/bulk-import
@@ -37,6 +37,28 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
     // School context for new learner accounts
     const schoolId = cls.school_id
+
+    // Personal-account limit: max 10 learners total across all their classes.
+    // We check this BEFORE parsing the file so we can fail fast with a clear
+    // message; the actual import still respects the limit per-row below.
+    if (user.institutionType === 'PERSONAL') {
+      const { data: myClasses } = await sb.from('classes')
+        .select('id').eq('teacher_id', user.id)
+      const myClassIds = (myClasses || []).map((c: any) => c.id)
+      let totalMembers = 0
+      if (myClassIds.length > 0) {
+        const { count } = await sb.from('class_members')
+          .select('id', { count: 'exact', head: true })
+          .in('class_id', myClassIds)
+        totalMembers = count ?? 0
+      }
+      if (totalMembers >= PERSONAL_MAX_LEARNERS) {
+        return NextResponse.json(
+          { error: `Individual teacher accounts are limited to ${PERSONAL_MAX_LEARNERS} learners in total. You already have ${totalMembers}. Upgrade to a School account to enrol more.` },
+          { status: 403 },
+        )
+      }
+    }
 
     // Parse the uploaded file
     const formData = await req.formData().catch(() => null)

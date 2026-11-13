@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { supabaseBrowser } from '@/lib/supabase-browser'
+import { SignupView } from '@/components/views/signup-view'
 
 const loginSchema = z.object({
   email: z.string().email('Enter a valid email'),
@@ -38,11 +39,16 @@ const DEMO_PASSWORD = 'eduquest123'
 export function LoginView({ embedded = false }: { embedded?: boolean }) {
   const [submitting, setSubmitting] = useState(false)
   const [open, setOpen] = useState(true)
+  const [showSignup, setShowSignup] = useState(false)
 
   const form = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
     defaultValues: { email: '', password: '' },
   })
+
+  if (showSignup) {
+    return <SignupView onBack={() => setShowSignup(false)} />
+  }
 
   async function onSubmit(values: LoginValues) {
     setSubmitting(true)
@@ -194,6 +200,17 @@ export function LoginView({ embedded = false }: { embedded?: boolean }) {
           </Card>
 
           <p className="mt-4 text-center text-xs text-muted-foreground">
+            Don&apos;t have an account?{' '}
+            <button
+              type="button"
+              onClick={() => setShowSignup(true)}
+              className="text-primary underline-offset-2 hover:underline font-medium"
+            >
+              Create one
+            </button>
+          </p>
+
+          <p className="mt-2 text-center text-xs text-muted-foreground">
             EduQuest LMS · © {new Date().getFullYear()} · For Zambian classrooms
           </p>
         </div>

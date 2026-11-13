@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { requireUser, supabaseService } from '@/lib/api-helpers'
 import {
-  MAX_REPORT_SCORE, gradeForScore, normalizeTo150, GRADING_SCALE, STANDARD_SUBJECTS,
+  MAX_REPORT_SCORE, gradeForScore, normalizeTo150, GRADING_SCALE,
+  STANDARD_SUBJECTS, computeTermTotal, remarkForGrade,
 } from '@/lib/assessment-utils'
 
 // GET /api/report-cards/[learnerId]?term=...
@@ -28,23 +29,26 @@ const TYPE_COLUMNS: Array<{ type: string; label: string }> = [
   { type: 'END_OF_TERM', label: 'END TERM' },
 ]
 
-// Remark generator using the 6-grade scale (A-F).
-function remarkForGrade(grade: string, score: number | null, subjectName: string): string {
+// Remark generator using the 6-grade scale (A-F) — remarks come from the
+// shared GRADING_SCALE constant so they always match the spec.
+function remarkForSubject(grade: string, score: number | null, subjectName: string): string {
   if (score === null) return 'No scores recorded yet.'
+  const base = remarkForGrade(grade)
+  // Optional subject-specific framing on top of the canonical remark
   switch (grade) {
     case 'A':
-      if (score >= 148) return `An outstanding, near-perfect performance in ${subjectName}!`
-      return `An excellent and perfectly stable performance in ${subjectName}!`
+      if (score >= 148) return `An outstanding, near-perfect performance in ${subjectName}! (${base})`
+      return `An excellent and perfectly stable performance in ${subjectName}! (${base})`
     case 'B':
-      return `A very good performance in ${subjectName}, though slightly lower than expected.`
+      return `A very good performance in ${subjectName}. (${base})`
     case 'C':
-      return `A good performance in ${subjectName} with room to grow.`
+      return `A good performance in ${subjectName} with room to grow. (${base})`
     case 'D':
-      return `A satisfactory result in ${subjectName} — more effort will lift this significantly.`
+      return `A fair result in ${subjectName} — more effort will lift this significantly. (${base})`
     case 'E':
-      return `A fair result in ${subjectName} — significant improvement is needed.`
+      return `An average result in ${subjectName} — significant improvement is needed. (${base})`
     case 'F':
-      return `A very weak area in ${subjectName} that needs urgent attention and extra practice.`
+      return `A very weak area in ${subjectName} that needs urgent attention and extra practice. (${base})`
     default:
       return '—'
   }
@@ -81,6 +85,14 @@ function autoTeacherComment(learnerName: string, overallScore: number | null, be
 export async function GET(req: Request, { params }: { params: Promise<{ learnerId: string }> }) {
   try {
     const user = await requireUser(['SUPER_USER', 'SCHOOL_ADMIN', 'TEACHER', 'LEARNER'])
+    // Personal (individual teacher) accounts don't get Report Card access.
+    // (LEARNER is allowed — they view their own report card.)
+    if (user.institutionType === 'PERSONAL' && user.role !== 'LEARNER') {
+      return NextResponse.json(
+        { error: 'Report Cards are not available for individual teacher accounts. Upgrade to a School account to access this feature.' },
+        { status: 403 },
+      )
+    }
     const { learnerId } = await params
     const sb = supabaseService()
     const url = new URL(req.url)
@@ -222,7 +234,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ learnerI
       }
       const termAvg = recordedCount > 0 ? Math.round(normalizedSum / recordedCount) : null
       const grade = gradeForScore(termAvg)
-      const remark = remarkForGrade(grade, termAvg, subject?.name || 'this subject')
+      const remark = remarkForSubject(grade, termAvg, subject?.name || 'this subject')
 
       subjectReports.push({
         subject: subject ? {
@@ -272,12 +284,18 @@ export async function GET(req: Request, { params }: { params: Promise<{ learnerI
       return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi)
     })
 
-    // 9. Compute totals — all on the 150-point scale (no percentages)
-    const pupilTotal = subjectReports.reduce((sum, s) => sum + (s.termAverage || 0), 0)
-    const subjectsWithScores = subjectReports.filter((s) => s.termAverage !== null)
-    const overallScore = subjectsWithScores.length > 0
-      ? Math.round(subjectsWithScores.reduce((sum, s) => sum + (s.termAverage || 0), 0) / subjectsWithScores.length)
-      : null
+    // 9. Compute totals using the grade-based Zambian spec:
+    //    Grades 6-7: SP1 + SP2 + best 4 from remaining 8
+    //    Grades 5-:  MATH + ENG + SCI + SS + best 2 from remaining 6
+    // The same calc is used by /api/mark-schedule so the totals match.
+    const normalizedForTermTotal: Array<{ code: string; score: number | null }> = subjectReports.map((sr) => ({
+      code: (sr.subject.code || '').toUpperCase(),
+      score: sr.termAverage,  // already normalized to /150
+    }))
+    const termTotalResult = computeTermTotal(learner.grade || 5, normalizedForTermTotal)
+    const pupilTotal = termTotalResult.termTotal
+    const selectedCount = termTotalResult.selectedSubjects.length
+    const overallScore = selectedCount > 0 ? Math.round(pupilTotal / selectedCount) : null
 
     // Class average: compute total for every learner in the same grade, then average
     const gradeLearnerTotals: number[] = []
@@ -308,7 +326,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ learnerI
       ? Math.round(gradeLearnerTotals.reduce((a, b) => a + b, 0) / gradeLearnerTotals.length)
       : null
 
-    // Best and worst subjects
+    // Best and worst subjects (among those with a recorded termAverage)
+    const subjectsWithScores = subjectReports.filter((s) => s.termAverage !== null)
     let bestSubject: string | null = null
     let worstSubject: string | null = null
     if (subjectsWithScores.length > 0) {
@@ -332,7 +351,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ learnerI
       term: term ? Number(term) : null,
       subjects: subjectReports,
       summary: {
-        pupilTotal: Math.round(pupilTotal),
+        termTotal: Math.round(pupilTotal),       // canonical name per spec
+        pupilTotal: Math.round(pupilTotal),      // kept for backwards-compat with old UI
+        termTotalRule: termTotalResult.rule,
+        termTotalSelected: termTotalResult.selectedSubjects,
+        termTotalDropped: termTotalResult.droppedSubjects,
         classAverage,
         overallScore,  // out of 150 — no percentages
         overallGrade: gradeForScore(overallScore),

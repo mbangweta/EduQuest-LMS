@@ -23,7 +23,17 @@ export interface CurrentUser {
   schoolId?: string | null
   schoolName?: string | null
   schoolCode?: string | null
+  // 'SCHOOL' for school admin accounts, 'PERSONAL' for individual teacher
+  // accounts. Older accounts may have null — treat as 'SCHOOL' for backwards
+  // compatibility (so existing SCHOOL_ADMIN users keep full access).
+  institutionType?: 'SCHOOL' | 'PERSONAL' | null
 }
+
+// ---------------------------------------------------------------------------
+// Personal account limits (enforced everywhere a teacher could create data)
+// ---------------------------------------------------------------------------
+export const PERSONAL_MAX_CLASSES = 3
+export const PERSONAL_MAX_LEARNERS = 10
 
 // ---------------------------------------------------------------------------
 // getCurrentUser() — read the current user from the Supabase session cookie.
@@ -41,6 +51,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
       .from('profiles')
       .select(`
         id, email, name, role, status, grade, phone, avatar_color, school_id,
+        institution_type,
         school:schools(id, name, code)
       `)
       .eq('id', user.id)
@@ -61,6 +72,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
       schoolId: profile.school_id,
       schoolName: profile.school?.name ?? null,
       schoolCode: profile.school?.code ?? null,
+      institutionType: (profile.institution_type as 'SCHOOL' | 'PERSONAL' | null) ?? null,
     }
   } catch (e) {
     console.error('[getCurrentUser] error:', e)
