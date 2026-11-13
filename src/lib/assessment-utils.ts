@@ -8,6 +8,20 @@ export const ASSESSMENT_TYPES: Array<{ value: string; label: string }> = [
   { value: 'END_OF_TERM', label: 'End-of-Term' },
 ]
 
+// Test types shown in the Mark Schedule dropdown. These map to the `type`
+// column on the `assessments` table (which is TEXT, so any value works).
+// END_OF_TERM is the default and is what report cards use as the "END TERM"
+// column. TEST_1..TEST_6 are for the six in-term tests.
+export const MARK_SCHEDULE_TEST_TYPES: Array<{ value: string; label: string }> = [
+  { value: 'END_OF_TERM', label: 'End of Term' },
+  { value: 'TEST_1', label: 'Test 1' },
+  { value: 'TEST_2', label: 'Test 2' },
+  { value: 'TEST_3', label: 'Test 3' },
+  { value: 'TEST_4', label: 'Test 4' },
+  { value: 'TEST_5', label: 'Test 5' },
+  { value: 'TEST_6', label: 'Test 6' },
+]
+
 const TYPE_LABELS: Record<string, string> = {
   // Current (preferred) types
   FORTNIGHTLY: 'Fortnightly',

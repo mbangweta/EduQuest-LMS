@@ -57,6 +57,9 @@ export async function GET(req: Request) {
     const classId = url.searchParams.get('classId')
     const termParam = url.searchParams.get('term')
     const grade = url.searchParams.get('grade')
+    // testType defaults to END_OF_TERM (the report-card "END TERM" column).
+    // Teachers can switch the dropdown to view/edit Test 1..Test 6 scores.
+    const testType = url.searchParams.get('testType') || 'END_OF_TERM'
 
     if (!classId && !grade) {
       return NextResponse.json({ error: 'classId or grade is required' }, { status: 400 })
@@ -153,7 +156,13 @@ export async function GET(req: Request) {
     } else if (classGrade != null) {
       aq = aq.eq('grade', classGrade)
     }
-    aq = aq.in('type', ['END_OF_TERM', 'MIDTERM'])
+    // Filter by the selected test type (defaults to END_OF_TERM).
+    // For END_OF_TERM, also fall back to MIDTERM if no END_OF_TERM exists.
+    if (testType === 'END_OF_TERM') {
+      aq = aq.in('type', ['END_OF_TERM', 'MIDTERM'])
+    } else {
+      aq = aq.eq('type', testType)
+    }
     if (termParam && termParam !== 'ALL') {
       aq = aq.eq('term', Number(termParam))
     }
@@ -174,7 +183,12 @@ export async function GET(req: Request) {
       if (!subjInfo) continue
       const matching = (assessments || []).filter((a: any) => a.subject_id === subjInfo.id)
       if (matching.length === 0) continue
-      const chosen = matching.find((a: any) => a.type === 'END_OF_TERM') || matching[0]
+      // For END_OF_TERM, prefer END_OF_TERM assessments but fall back to MIDTERM.
+      // For other test types (TEST_1..TEST_6), just take the first match (they're
+      // already filtered to the selected type).
+      const chosen = testType === 'END_OF_TERM'
+        ? (matching.find((a: any) => a.type === 'END_OF_TERM') || matching[0])
+        : matching[0]
       assessmentByCode.set(std.code, {
         id: chosen.id,
         title: chosen.title,

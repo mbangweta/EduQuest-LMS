@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { ClipboardList, Printer, Award, Sparkles, Loader2 } from 'lucide-react'
 import { api } from '@/lib/api-client'
+import { MARK_SCHEDULE_TEST_TYPES } from '@/lib/assessment-utils'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -21,7 +22,8 @@ import { InlineScoreInput } from '@/components/views/shared/inline-score-input'
 export function SchoolAdminMarkSchedulesView() {
   const [classes, setClasses] = useState<any[]>([])
   const [classId, setClassId] = useState('')
-  const [term, setTerm] = useState('ALL')
+  const [term, setTerm] = useState('1')
+  const [testType, setTestType] = useState('END_OF_TERM')
   const [data, setData] = useState<any>(null)
   const [roster, setRoster] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -56,11 +58,12 @@ export function SchoolAdminMarkSchedulesView() {
     setFetching(true)
     const params = new URLSearchParams({ classId })
     if (term !== 'ALL') params.set('term', term)
+    params.set('testType', testType)
     api.get(`/api/mark-schedule?${params.toString()}`)
       .then(setData)
       .catch((e: any) => { toast.error(e?.message || 'Failed to load'); setData(null) })
       .finally(() => setFetching(false))
-  }, [classId, term, reloadKey])
+  }, [classId, term, testType, reloadKey])
 
   if (loading) return <div className="p-6 space-y-3"><Skeleton className="h-12" /><Skeleton className="h-96" /></div>
 
@@ -77,6 +80,7 @@ export function SchoolAdminMarkSchedulesView() {
       const r = await api.post<any>('/api/mark-schedule/initialize', {
         classId,
         term: Number(activeTermForInit),
+        testType,
       })
       toast.success(`Mark schedule ready — ${r.createdCount} new assessment${r.createdCount === 1 ? '' : 's'} created, ${r.existingCount} already existed.`)
       setReloadKey((k) => k + 1)
@@ -116,12 +120,17 @@ export function SchoolAdminMarkSchedulesView() {
             </SelectContent>
           </Select>
           <Select value={term} onValueChange={setTerm}>
-            <SelectTrigger className="w-full sm:w-40"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-full sm:w-32"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="ALL">All terms</SelectItem>
               <SelectItem value="1">Term 1</SelectItem>
               <SelectItem value="2">Term 2</SelectItem>
               <SelectItem value="3">Term 3</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={testType} onValueChange={setTestType}>
+            <SelectTrigger className="w-full sm:w-40"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {MARK_SCHEDULE_TEST_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
             </SelectContent>
           </Select>
         </CardContent>
@@ -163,7 +172,7 @@ export function SchoolAdminMarkSchedulesView() {
             <div>
               <h2 className="text-lg font-semibold">Start entering scores online</h2>
               <p className="text-sm text-muted-foreground mt-1 max-w-md mx-auto">
-                No End-of-Term assessments exist for {selectedClass?.name} yet (term {activeTermForInit}).
+                No {testType === 'END_OF_TERM' ? 'End-of-Term' : testType.replace('_', ' ')} assessments exist for {selectedClass?.name} yet (Term {activeTermForInit}).
                 Click below to create the 10 standard subject assessments — you can then
                 type scores directly into the grid below, or upload a mark sheet template.
               </p>

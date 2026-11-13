@@ -26,6 +26,8 @@ export async function POST(req: Request) {
     const body = await req.json().catch(() => ({}))
     const classId = String(body.classId || '')
     const term = Number(body.term) || 1
+    // testType defaults to END_OF_TERM; can be TEST_1..TEST_6
+    const testType = String(body.testType || 'END_OF_TERM')
 
     if (!classId) {
       return NextResponse.json({ error: 'classId is required' }, { status: 400 })
@@ -93,7 +95,7 @@ export async function POST(req: Request) {
         .eq('class_id', classId)
         .eq('term', term)
         .eq('subject_id', subjInfo.id)
-        .eq('type', 'END_OF_TERM')
+        .eq('type', testType)
         .maybeSingle()
 
       if (existingAssessment) {
@@ -105,9 +107,9 @@ export async function POST(req: Request) {
       const { data: createdAssessment, error: createErr } = await sb.from('assessments').insert({
         school_id: schoolId,
         academic_year_id: null,
-        title: `${subjInfo.name} — End of Term ${term}`,
+        title: `${subjInfo.name} — ${testType === 'END_OF_TERM' ? 'End of Term' : testType.replace('_', ' ')} ${term}`,
         description: `Auto-created for online mark entry`,
-        type: 'END_OF_TERM',
+        type: testType,
         term,
         subject_id: subjInfo.id,
         grade: cls.grade,
