@@ -4,11 +4,9 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { ClipboardList, Printer, Award, Sparkles, Loader2 } from 'lucide-react'
 import { api } from '@/lib/api-client'
-import { gradeColorClass } from '@/lib/assessment-utils'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -197,16 +195,13 @@ export function SchoolAdminMarkSchedulesView() {
                       </TableHead>
                     ))}
                     <TableHead className="text-center bg-muted/30">Total</TableHead>
-                    <TableHead className="text-center bg-muted/30">Average</TableHead>
-                    <TableHead className="text-center bg-muted/30">Grade</TableHead>
-                    <TableHead className="text-center bg-muted/30">Rank</TableHead>
+                    <TableHead className="text-center bg-muted/30">Position</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {rows.map((r: any, idx: number) => {
-                    const avgScore = r.averageScore
-                    const grade = r.grade || '—'
                     const total = r.total
+                    const position = r.position
                     return (
                       <TableRow key={r.learner.id}>
                         <TableCell className="sticky left-0 bg-background z-10 text-center text-muted-foreground">{idx + 1}</TableCell>
@@ -245,22 +240,48 @@ export function SchoolAdminMarkSchedulesView() {
                             </TableCell>
                           )
                         })}
-                        <TableCell className="text-center bg-muted/30 font-semibold">{total === null || total === undefined ? '—' : total}</TableCell>
-                        <TableCell className="text-center bg-muted/30 font-semibold">{avgScore === null ? '—' : avgScore}</TableCell>
-                        <TableCell className="text-center bg-muted/30">
-                          <Badge variant="outline" className={gradeColorClass(grade)}>{grade}</Badge>
+                        <TableCell className="text-center bg-muted/30 font-semibold">
+                          {total === null || total === undefined ? '—' : total}
                         </TableCell>
-                        <TableCell className="text-center bg-muted/30">
-                          {r.rank ? (
-                            <span className="inline-flex items-center gap-1 font-semibold">
-                              {r.rank === 1 && <Award className="h-3.5 w-3.5 text-amber-500" />}
-                              {r.rank}<span className="text-muted-foreground font-normal text-xs">/{rows.filter((x: any) => x.rank).length}</span>
+                        <TableCell className="text-center bg-muted/30 font-semibold">
+                          {position === null || position === undefined ? (
+                            <span className="text-muted-foreground">—</span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1">
+                              {position === 1 && <Award className="h-3.5 w-3.5 text-amber-500" />}
+                              {position}
                             </span>
-                          ) : <span className="text-muted-foreground">—</span>}
+                          )}
                         </TableCell>
                       </TableRow>
                     )
                   })}
+                  {/* === Class averages row (bottom) === */}
+                  <TableRow className="border-t-2 border-gray-400 bg-muted/40 font-semibold">
+                    <TableCell className="sticky left-0 bg-muted/40 z-10 text-center text-muted-foreground" colSpan={2}>
+                      <span className="italic">Class Average</span>
+                    </TableCell>
+                    {subjects.map((s) => {
+                      const avg = data?.classAverages?.bySubject?.[s.code]
+                      return (
+                        <TableCell key={s.code} className="text-center">
+                          {avg === null || avg === undefined ? (
+                            <span className="text-muted-foreground">—</span>
+                          ) : (
+                            <span>{avg}</span>
+                          )}
+                        </TableCell>
+                      )
+                    })}
+                    <TableCell className="text-center bg-muted/50">
+                      {data?.classAverages?.total === null || data?.classAverages?.total === undefined
+                        ? <span className="text-muted-foreground">—</span>
+                        : data.classAverages.total}
+                    </TableCell>
+                    <TableCell className="text-center bg-muted/50 text-muted-foreground italic text-xs">
+                      avg of {data?.classAverages?.learnersWithScores ?? 0} learner{(data?.classAverages?.learnersWithScores ?? 0) === 1 ? '' : 's'}
+                    </TableCell>
+                  </TableRow>
                 </TableBody>
               </Table>
             </div>

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { requireUser, supabaseService } from '@/lib/api-helpers'
 import {
-  normalizeTo150, gradeForScore, STANDARD_SUBJECTS, computeTermTotal,
+  normalizeTo150, STANDARD_SUBJECTS, computeTermTotal,
 } from '@/lib/assessment-utils'
 
 // ============================================================================
@@ -17,17 +17,26 @@ import {
 //         learner: { id, name, email, avatarColor },
 //         scoresBySubject: { MATH: number|null, ENG: number|null, ... }, // raw score
 //         recordedCount,
-//         averageScore,  // out of 150 (no percentages)
-//         grade,
-//         rank
+//         total,           // grade-based term total (SP1+SP2+best4 etc.)
+//         position         // 1-based rank by total; ties get the SAME position;
+//                          // null if no scores recorded
 //       }
 //     ],
+//     classAverages: {     // for the bottom "Average" row in the UI
+//       bySubject: { MATH: avg|null, ... },
+//       total: avgTotal|null,
+//       learnersWithScores: number
+//     },
 //     assessments: [...]   // backward-compat / debugging
 //   }
 //
 // The score for each subject cell is the latest END_OF_TERM assessment score
 // for that class (or grade) + term + subject. If `term` is 'ALL'/absent, the
 // latest END_OF_TERM assessment (any term) is used per subject.
+//
+// Position uses standard competition ranking: learners with the same total
+// get the same position number, and the next distinct total skips the tie
+// count (e.g., 1, 1, 3, 4, 4, 6).
 //
 // All 10 standard subjects always appear as columns, even if the DB `subjects`
 // table is empty. Missing subjects are auto-created on the fly so the matrix
@@ -243,10 +252,6 @@ export async function GET(req: Request) {
       const termTotalResult = computeTermTotal(gradeNum, normalizedByCode)
       const termTotal = termTotalResult.termTotal
 
-      // Average = termTotal / number of selected subjects (still on /150 scale)
-      const selectedCount = termTotalResult.selectedSubjects.length
-      const averageScore = selectedCount > 0 ? Math.round(termTotal / selectedCount) : null
-
       return {
         learner: {
           id: learner.id, name: learner.name, email: learner.email, avatarColor: learner.avatar_color,
@@ -260,19 +265,52 @@ export async function GET(req: Request) {
           selected: termTotalResult.selectedSubjects,
           dropped: termTotalResult.droppedSubjects,
         },
-        averageScore,
-        grade: gradeForScore(averageScore),
+        // Position is assigned below (standard competition ranking by total)
+        position: null as number | null,
       }
     })
 
-    // ---------- 6. Rank by average desc (only learners with ≥1 recorded score) ----------
+    // ---------- 6. Position (standard competition ranking by total) ----------
+    // Learners with the same total get the SAME position number.
+    // The next position after a tie skips accordingly (e.g., 1, 1, 3, 4, 4, 6).
+    // Learners with null total (no recorded scores) get null position.
     const ranked = rows
-      .filter((r: any) => r.averageScore !== null)
-      .sort((a: any, b: any) => (b.averageScore - a.averageScore))
-    ranked.forEach((r: any, i: number) => { (r as any).rank = i + 1 })
-    const rankMap = new Map<string, number>()
-    for (const r of ranked) rankMap.set(r.learner.id, (r as any).rank)
-    for (const r of rows) (r as any).rank = rankMap.get(r.learner.id) ?? null
+      .filter((r: any) => r.total !== null && r.total !== undefined)
+      .sort((a: any, b: any) => (b.total - a.total))
+    let prevTotal: number | null = null
+    let prevPosition = 0
+    ranked.forEach((r: any, i: number) => {
+      const total = r.total as number
+      if (prevTotal === null || total !== prevTotal) {
+        // New position = current 1-based index (so ties get the same number,
+        // and the next distinct total skips the tie count)
+        prevPosition = i + 1
+        prevTotal = total
+      }
+      r.position = prevPosition
+    })
+    // (Learners not in `ranked` keep position: null — they have no scores yet.)
+
+    // ---------- 6b. Class averages (for the bottom "Average" row) ----------
+    // Per-subject average = mean of all non-null RAW scores in that subject.
+    // Total average = mean of all non-null learner totals.
+    const classAveragesBySubject: Record<string, number | null> = {}
+    for (const std of STANDARD_SUBJECTS) {
+      const scores: number[] = []
+      for (const r of rows) {
+        const v = r.scoresBySubject?.[std.code]
+        if (v !== null && v !== undefined) scores.push(v)
+      }
+      classAveragesBySubject[std.code] = scores.length > 0
+        ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
+        : null
+    }
+    const totalsForAverage: number[] = rows
+      .map((r) => r.total)
+      .filter((t): t is number => t !== null && t !== undefined)
+    const classAverageTotal = totalsForAverage.length > 0
+      ? Math.round(totalsForAverage.reduce((a, b) => a + b, 0) / totalsForAverage.length)
+      : null
 
     let classInfo: any = null
     if (classId) {
@@ -285,6 +323,11 @@ export async function GET(req: Request) {
       roster,
       subjects: subjectColumns,
       rows,
+      classAverages: {
+        bySubject: classAveragesBySubject,
+        total: classAverageTotal,
+        learnersWithScores: totalsForAverage.length,
+      },
       // Backward-compat / debugging — expose the resolved assessments
       assessments: Array.from(assessmentByCode.values()).map((a) => ({
         id: a.id,
