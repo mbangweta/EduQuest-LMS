@@ -1,0 +1,840 @@
+     1→-- ============================================================================
+     2→-- EduQuest LMS — Supabase Schema + Row Level Security (RLS)
+     3→-- ============================================================================
+     4→-- Run this entire script in the Supabase SQL Editor (Dashboard → SQL → New Query).
+     5→-- It is idempotent: it uses `IF NOT EXISTS` so you can re-run it safely.
+     6→--
+     7→-- After running this, set these env vars in your .env file:
+     8→--   SUPABASE_URL=https://YOUR-PROJECT.supabase.co
+     9→--   SUPABASE_SERVICE_ROLE_KEY=eyJhbGc...   (from Supabase → Settings → API → service_role)
+    10→--   NEXT_PUBLIC_SUPABASE_URL=https://YOUR-PROJECT.supabase.co
+    11→--   NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGc... (from Supabase → Settings → API → anon)
+    12→--
+    13→-- Then run `bun run db:seed-supabase` to populate demo data.
+    14→-- ============================================================================
+    15→
+    16→-- ---------------------------------------------------------------------------
+    17→-- EXTENSIONS
+    18→-- ---------------------------------------------------------------------------
+    19→CREATE EXTENSION IF NOT EXISTS "pgcrypto";  -- for gen_random_uuid()
+    20→
+    21→-- ---------------------------------------------------------------------------
+    22→-- ENUMS (Postgres native enums for type safety)
+    23→-- ---------------------------------------------------------------------------
+    24→DO $$ BEGIN
+    25→  CREATE TYPE user_role AS ENUM ('ADMIN', 'TEACHER', 'LEARNER');
+    26→EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    27→
+    28→DO $$ BEGIN
+    29→  CREATE TYPE user_status AS ENUM ('ACTIVE', 'DISABLED');
+    30→EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    31→
+    32→DO $$ BEGIN
+    33→  CREATE TYPE lesson_status AS ENUM ('DRAFT', 'PUBLISHED', 'ARCHIVED');
+    34→EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    35→
+    36→DO $$ BEGIN
+    37→  CREATE TYPE quiz_status AS ENUM ('DRAFT', 'PUBLISHED', 'CLOSED');
+    38→EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    39→
+    40→DO $$ BEGIN
+    41→  CREATE TYPE difficulty AS ENUM ('EASY', 'MEDIUM', 'HARD', 'VERY_HARD');
+    42→EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    43→
+    44→DO $$ BEGIN
+    45→  CREATE TYPE curriculum AS ENUM ('ZAMBIAN', 'ECZ', 'CAMBRIDGE', 'GENERAL');
+    46→EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    47→
+    48→DO $$ BEGIN
+    49→  CREATE TYPE question_type AS ENUM ('MULTIPLE_CHOICE', 'TRUE_FALSE', 'FILL_BLANK', 'SHORT_ANSWER', 'NUMERICAL', 'MATCHING');
+    50→EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    51→
+    52→DO $$ BEGIN
+    53→  CREATE TYPE attempt_status AS ENUM ('IN_PROGRESS', 'SUBMITTED', 'TIMED_OUT');
+    54→EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    55→
+    56→DO $$ BEGIN
+    57→  CREATE TYPE show_answers_mode AS ENUM ('NEVER', 'AFTER_SUBMISSION', 'AFTER_DEADLINE');
+    58→EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    59→
+    60→DO $$ BEGIN
+    61→  CREATE TYPE score_policy AS ENUM ('HIGHEST', 'LATEST');
+    62→EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    63→
+    64→DO $$ BEGIN
+    65→  CREATE TYPE notification_type AS ENUM ('NEW_QUIZ', 'NEW_LESSON', 'DEADLINE', 'SUBMISSION', 'RESULT', 'ANNOUNCEMENT', 'SYSTEM');
+    66→EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    67→
+    68→-- ---------------------------------------------------------------------------
+    69→-- Helper: updated_at trigger
+    70→-- ---------------------------------------------------------------------------
+    71→CREATE OR REPLACE FUNCTION set_updated_at()
+    72→RETURNS TRIGGER AS $$
+    73→BEGIN
+    74→  NEW.updated_at = NOW();
+    75→  RETURN NEW;
+    76→END;
+    77→$$ LANGUAGE plpgsql;
+    78→
+    79→-- ---------------------------------------------------------------------------
+    80→-- PROFILES (mirrors auth.users; one row per Supabase Auth user)
+    81→-- ---------------------------------------------------------------------------
+    82→CREATE TABLE IF NOT EXISTS public.profiles (
+    83→  id          UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    84→  email       TEXT UNIQUE NOT NULL,
+    85→  name        TEXT NOT NULL,
+    86→  role        user_role NOT NULL DEFAULT 'LEARNER',
+    87→  phone       TEXT,
+    88→  grade       INT,
+    89→  status      user_status NOT NULL DEFAULT 'ACTIVE',
+    90→  avatar_color TEXT,
+    91→  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    92→  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    93→);
+    94→CREATE INDEX IF NOT EXISTS profiles_role_idx ON public.profiles(role);
+    95→CREATE INDEX IF NOT EXISTS profiles_grade_idx ON public.profiles(grade);
+    96→DROP TRIGGER IF EXISTS profiles_updated_at ON public.profiles;
+    97→CREATE TRIGGER profiles_updated_at BEFORE UPDATE ON public.profiles
+    98→  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+    99→
+   100→-- Auto-create a profile row when a new auth.users row is created
+   101→CREATE OR REPLACE FUNCTION public.handle_new_user()
+   102→RETURNS TRIGGER AS $$
+   103→DECLARE
+   104→  v_role TEXT;
+   105→  v_name TEXT;
+   106→BEGIN
+   107→  -- Read role/name from raw_user_meta_data, defaulting safely
+   108→  v_role := COALESCE(NEW.raw_user_meta_data->>'role', 'LEARNER');
+   109→  IF v_role NOT IN ('ADMIN', 'TEACHER', 'LEARNER') THEN
+   110→    v_role := 'LEARNER';
+   111→  END IF;
+   112→  v_name := COALESCE(NEW.raw_user_meta_data->>'name', split_part(NEW.email, '@', 1));
+   113→  INSERT INTO public.profiles (id, email, name, role)
+   114→  VALUES (NEW.id, NEW.email, v_name, v_role::user_role)
+   115→  ON CONFLICT (id) DO NOTHING;
+   116→  RETURN NEW;
+   117→END;
+   118→$$ LANGUAGE plpgsql SECURITY DEFINER;
+   119→DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+   120→CREATE TRIGGER on_auth_user_created
+   121→  AFTER INSERT ON auth.users
+   122→  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+   123→
+   124→-- ---------------------------------------------------------------------------
+   125→-- SUBJECTS
+   126→-- ---------------------------------------------------------------------------
+   127→CREATE TABLE IF NOT EXISTS public.subjects (
+   128→  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   129→  name        TEXT NOT NULL,
+   130→  code        TEXT UNIQUE NOT NULL,
+   131→  description TEXT,
+   132→  color       TEXT,
+   133→  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   134→);
+   135→
+   136→-- ---------------------------------------------------------------------------
+   137→-- CLASSES
+   138→-- ---------------------------------------------------------------------------
+   139→CREATE TABLE IF NOT EXISTS public.classes (
+   140→  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   141→  name        TEXT NOT NULL,
+   142→  grade       INT NOT NULL,
+   143→  subject_id  UUID NOT NULL REFERENCES public.subjects(id) ON DELETE RESTRICT,
+   144→  description TEXT,
+   145→  class_code  TEXT UNIQUE NOT NULL,
+   146→  teacher_id  UUID NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
+   147→  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   148→  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   149→);
+   150→CREATE INDEX IF NOT EXISTS classes_teacher_id_idx ON public.classes(teacher_id);
+   151→CREATE INDEX IF NOT EXISTS classes_subject_id_idx ON public.classes(subject_id);
+   152→DROP TRIGGER IF EXISTS classes_updated_at ON public.classes;
+   153→CREATE TRIGGER classes_updated_at BEFORE UPDATE ON public.classes
+   154→  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+   155→
+   156→-- ---------------------------------------------------------------------------
+   157→-- CLASS MEMBERS
+   158→-- ---------------------------------------------------------------------------
+   159→CREATE TABLE IF NOT EXISTS public.class_members (
+   160→  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   161→  class_id    UUID NOT NULL REFERENCES public.classes(id) ON DELETE CASCADE,
+   162→  learner_id  UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+   163→  enrolled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   164→  UNIQUE (class_id, learner_id)
+   165→);
+   166→CREATE INDEX IF NOT EXISTS class_members_learner_id_idx ON public.class_members(learner_id);
+   167→
+   168→-- ---------------------------------------------------------------------------
+   169→-- LESSONS
+   170→-- ---------------------------------------------------------------------------
+   171→CREATE TABLE IF NOT EXISTS public.lessons (
+   172→  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   173→  title             TEXT NOT NULL,
+   174→  grade             INT NOT NULL,
+   175→  subject_id        UUID NOT NULL REFERENCES public.subjects(id) ON DELETE RESTRICT,
+   176→  topic             TEXT NOT NULL,
+   177→  objectives        TEXT NOT NULL DEFAULT '',
+   178→  notes             TEXT NOT NULL DEFAULT '',
+   179→  activities        TEXT,
+   180→  examples          TEXT,
+   181→  practice_questions TEXT,
+   182→  homework          TEXT,
+   183→  summary           TEXT,
+   184→  attachments       JSONB,  -- [{name, url, type, storage_path?}]
+   185→  video_links       JSONB,  -- ["https://...", ...]
+   186→  status            lesson_status NOT NULL DEFAULT 'DRAFT',
+   187→  teacher_id        UUID NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
+   188→  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   189→  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   190→);
+   191→CREATE INDEX IF NOT EXISTS lessons_teacher_id_idx ON public.lessons(teacher_id);
+   192→CREATE INDEX IF NOT EXISTS lessons_subject_id_idx ON public.lessons(subject_id);
+   193→CREATE INDEX IF NOT EXISTS lessons_status_idx ON public.lessons(status);
+   194→DROP TRIGGER IF EXISTS lessons_updated_at ON public.lessons;
+   195→CREATE TRIGGER lessons_updated_at BEFORE UPDATE ON public.lessons
+   196→  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+   197→
+   198→-- ---------------------------------------------------------------------------
+   199→-- LESSON ASSIGNMENTS
+   200→-- ---------------------------------------------------------------------------
+   201→CREATE TABLE IF NOT EXISTS public.lesson_assignments (
+   202→  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   203→  lesson_id   UUID NOT NULL REFERENCES public.lessons(id) ON DELETE CASCADE,
+   204→  class_id    UUID NOT NULL REFERENCES public.classes(id) ON DELETE CASCADE,
+   205→  due_date    TIMESTAMPTZ,
+   206→  assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   207→  UNIQUE (lesson_id, class_id)
+   208→);
+   209→CREATE INDEX IF NOT EXISTS lesson_assignments_class_id_idx ON public.lesson_assignments(class_id);
+   210→
+   211→-- ---------------------------------------------------------------------------
+   212→-- LESSON PROGRESS
+   213→-- ---------------------------------------------------------------------------
+   214→CREATE TABLE IF NOT EXISTS public.lesson_progress (
+   215→  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   216→  lesson_id    UUID NOT NULL REFERENCES public.lessons(id) ON DELETE CASCADE,
+   217→  learner_id   UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+   218→  completed    BOOLEAN NOT NULL DEFAULT FALSE,
+   219→  completed_at TIMESTAMPTZ,
+   220→  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   221→  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   222→  UNIQUE (lesson_id, learner_id)
+   223→);
+   224→CREATE INDEX IF NOT EXISTS lesson_progress_learner_id_idx ON public.lesson_progress(learner_id);
+   225→DROP TRIGGER IF EXISTS lesson_progress_updated_at ON public.lesson_progress;
+   226→CREATE TRIGGER lesson_progress_updated_at BEFORE UPDATE ON public.lesson_progress
+   227→  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+   228→
+   229→-- ---------------------------------------------------------------------------
+   230→-- QUIZZES
+   231→-- ---------------------------------------------------------------------------
+   232→CREATE TABLE IF NOT EXISTS public.quizzes (
+   233→  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   234→  title               TEXT NOT NULL,
+   235→  grade               INT NOT NULL,
+   236→  subject_id          UUID NOT NULL REFERENCES public.subjects(id) ON DELETE RESTRICT,
+   237→  topic               TEXT NOT NULL,
+   238→  description         TEXT,
+   239→  difficulty          difficulty NOT NULL DEFAULT 'MEDIUM',
+   240→  curriculum          curriculum NOT NULL DEFAULT 'ZAMBIAN',
+   241→  instructions        TEXT,
+   242→  time_limit          INT NOT NULL DEFAULT 30,
+   243→  passing_score       INT NOT NULL DEFAULT 50,
+   244→  max_attempts        INT NOT NULL DEFAULT 1,
+   245→  random_question_order BOOLEAN NOT NULL DEFAULT FALSE,
+   246→  random_answer_order BOOLEAN NOT NULL DEFAULT FALSE,
+   247→  allow_retakes       BOOLEAN NOT NULL DEFAULT TRUE,
+   248→  show_answers        show_answers_mode NOT NULL DEFAULT 'AFTER_SUBMISSION',
+   249→  show_explanations   BOOLEAN NOT NULL DEFAULT TRUE,
+   250→  score_policy        score_policy NOT NULL DEFAULT 'HIGHEST',
+   251→  status              quiz_status NOT NULL DEFAULT 'DRAFT',
+   252→  teacher_id          UUID NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
+   253→  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   254→  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   255→);
+   256→CREATE INDEX IF NOT EXISTS quizzes_teacher_id_idx ON public.quizzes(teacher_id);
+   257→CREATE INDEX IF NOT EXISTS quizzes_subject_id_idx ON public.quizzes(subject_id);
+   258→CREATE INDEX IF NOT EXISTS quizzes_status_idx ON public.quizzes(status);
+   259→DROP TRIGGER IF EXISTS quizzes_updated_at ON public.quizzes;
+   260→CREATE TRIGGER quizzes_updated_at BEFORE UPDATE ON public.quizzes
+   261→  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+   262→
+   263→-- ---------------------------------------------------------------------------
+   264→-- QUIZ QUESTIONS
+   265→-- ---------------------------------------------------------------------------
+   266→CREATE TABLE IF NOT EXISTS public.quiz_questions (
+   267→  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   268→  quiz_id             UUID NOT NULL REFERENCES public.quizzes(id) ON DELETE CASCADE,
+   269→  type                question_type NOT NULL,
+   270→  question_text       TEXT NOT NULL,
+   271→  options             JSONB,         -- string[] for MC
+   272→  correct_answer      JSONB,         -- string | number | boolean | {left: right}
+   273→  accepted_answers   JSONB,         -- string[] for FILL_BLANK
+   274→  matching_pairs     JSONB,         -- [{left, right}]
+   275→  marking_guide      TEXT,           -- for SHORT_ANSWER (hidden from learner)
+   276→  numerical_tolerance DOUBLE PRECISION,
+   277→  mark_allocation    INT NOT NULL DEFAULT 1,
+   278→  explanation        TEXT,
+   279→  "order"            INT NOT NULL DEFAULT 0,
+   280→  question_bank_id   UUID REFERENCES public.question_bank(id) ON DELETE SET NULL,
+   281→  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   282→);
+   283→CREATE INDEX IF NOT EXISTS quiz_questions_quiz_id_idx ON public.quiz_questions(quiz_id);
+   284→CREATE INDEX IF NOT EXISTS quiz_questions_order_idx ON public.quiz_questions("order");
+   285→
+   286→-- ---------------------------------------------------------------------------
+   287→-- QUIZ ASSIGNMENTS
+   288→-- ---------------------------------------------------------------------------
+   289→CREATE TABLE IF NOT EXISTS public.quiz_assignments (
+   290→  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   291→  quiz_id    UUID NOT NULL REFERENCES public.quizzes(id) ON DELETE CASCADE,
+   292→  class_id   UUID NOT NULL REFERENCES public.classes(id) ON DELETE CASCADE,
+   293→  start_date TIMESTAMPTZ,
+   294→  end_date   TIMESTAMPTZ,
+   295→  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   296→  UNIQUE (quiz_id, class_id)
+   297→);
+   298→CREATE INDEX IF NOT EXISTS quiz_assignments_class_id_idx ON public.quiz_assignments(class_id);
+   299→
+   300→-- ---------------------------------------------------------------------------
+   301→-- QUIZ ATTEMPTS
+   302→-- ---------------------------------------------------------------------------
+   303→CREATE TABLE IF NOT EXISTS public.quiz_attempts (
+   304→  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   305→  quiz_id        UUID NOT NULL REFERENCES public.quizzes(id) ON DELETE CASCADE,
+   306→  learner_id     UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+   307→  assignment_id  UUID REFERENCES public.quiz_assignments(id) ON DELETE SET NULL,
+   308→  attempt_number INT NOT NULL DEFAULT 1,
+   309→  started_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   310→  submitted_at   TIMESTAMPTZ,
+   311→  status         attempt_status NOT NULL DEFAULT 'IN_PROGRESS',
+   312→  score          DOUBLE PRECISION,
+   313→  max_score      DOUBLE PRECISION,
+   314→  percentage     DOUBLE PRECISION,
+   315→  grade          TEXT,
+   316→  passed         BOOLEAN,
+   317→  time_spent     INT,
+   318→  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   319→);
+   320→CREATE INDEX IF NOT EXISTS quiz_attempts_quiz_id_idx ON public.quiz_attempts(quiz_id);
+   321→CREATE INDEX IF NOT EXISTS quiz_attempts_learner_id_idx ON public.quiz_attempts(learner_id);
+   322→CREATE INDEX IF NOT EXISTS quiz_attempts_assignment_id_idx ON public.quiz_attempts(assignment_id);
+   323→
+   324→-- ---------------------------------------------------------------------------
+   325→-- QUIZ ANSWERS
+   326→-- ---------------------------------------------------------------------------
+   327→CREATE TABLE IF NOT EXISTS public.quiz_answers (
+   328→  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   329→  attempt_id        UUID NOT NULL REFERENCES public.quiz_attempts(id) ON DELETE CASCADE,
+   330→  question_id       UUID NOT NULL REFERENCES public.quiz_questions(id) ON DELETE CASCADE,
+   331→  learner_answer    JSONB,
+   332→  is_correct        BOOLEAN,
+   333→  marks_awarded     DOUBLE PRECISION,
+   334→  ai_marking_result  JSONB,
+   335→  teacher_override  BOOLEAN NOT NULL DEFAULT FALSE,
+   336→  graded_at         TIMESTAMPTZ,
+   337→  UNIQUE (attempt_id, question_id)
+   338→);
+   339→CREATE INDEX IF NOT EXISTS quiz_answers_question_id_idx ON public.quiz_answers(question_id);
+   340→
+   341→-- ---------------------------------------------------------------------------
+   342→-- QUESTION BANK (must be created BEFORE quiz_questions because of FK)
+   343→-- Note: we created it inline above with ON DELETE SET NULL — we need to ensure
+   344→-- the table exists. Move the CREATE here for clarity:
+   345→-- ---------------------------------------------------------------------------
+   346→CREATE TABLE IF NOT EXISTS public.question_bank (
+   347→  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   348→  grade               INT NOT NULL,
+   349→  subject_id          UUID NOT NULL REFERENCES public.subjects(id) ON DELETE RESTRICT,
+   350→  topic               TEXT NOT NULL,
+   351→  type                question_type NOT NULL,
+   352→  question_text       TEXT NOT NULL,
+   353→  options             JSONB,
+   354→  correct_answer      JSONB,
+   355→  accepted_answers   JSONB,
+   356→  matching_pairs     JSONB,
+   357→  marking_guide      TEXT,
+   358→  numerical_tolerance DOUBLE PRECISION,
+   359→  mark_allocation    INT NOT NULL DEFAULT 1,
+   360→  explanation        TEXT,
+   361→  difficulty         difficulty NOT NULL DEFAULT 'MEDIUM',
+   362→  created_by_id      UUID NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
+   363→  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   364→  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   365→);
+   366→CREATE INDEX IF NOT EXISTS question_bank_subject_id_idx ON public.question_bank(subject_id);
+   367→CREATE INDEX IF NOT EXISTS question_bank_topic_idx ON public.question_bank(topic);
+   368→CREATE INDEX IF NOT EXISTS question_bank_created_by_id_idx ON public.question_bank(created_by_id);
+   369→DROP TRIGGER IF EXISTS question_bank_updated_at ON public.question_bank;
+   370→CREATE TRIGGER question_bank_updated_at BEFORE UPDATE ON public.question_bank
+   371→  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+   372→
+   373→-- Add the FK from quiz_questions to question_bank now that question_bank exists
+   374→DO $$ BEGIN
+   375→  ALTER TABLE public.quiz_questions
+   376→    ADD CONSTRAINT quiz_questions_question_bank_id_fkey
+   377→    FOREIGN KEY (question_bank_id) REFERENCES public.question_bank(id) ON DELETE SET NULL;
+   378→EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+   379→
+   380→-- ---------------------------------------------------------------------------
+   381→-- NOTIFICATIONS
+   382→-- ---------------------------------------------------------------------------
+   383→CREATE TABLE IF NOT EXISTS public.notifications (
+   384→  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   385→  user_id    UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+   386→  type       notification_type NOT NULL,
+   387→  title      TEXT NOT NULL,
+   388→  message    TEXT NOT NULL,
+   389→  data       JSONB,
+   390→  read       BOOLEAN NOT NULL DEFAULT FALSE,
+   391→  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   392→);
+   393→CREATE INDEX IF NOT EXISTS notifications_user_id_read_idx ON public.notifications(user_id, read);
+   394→CREATE INDEX IF NOT EXISTS notifications_created_at_idx ON public.notifications(created_at);
+   395→
+   396→-- ---------------------------------------------------------------------------
+   397→-- STORAGE BUCKET for lesson attachments
+   398→-- ---------------------------------------------------------------------------
+   399→INSERT INTO storage.buckets (id, name, public)
+   400→VALUES ('lesson-attachments', 'lesson-attachments', true)
+   401→ON CONFLICT (id) DO NOTHING;
+   402→
+   403→-- ===========================================================================
+   404→-- ROW LEVEL SECURITY (RLS)
+   405→-- ===========================================================================
+   406→ALTER TABLE public.profiles          ENABLE ROW LEVEL SECURITY;
+   407→ALTER TABLE public.subjects           ENABLE ROW LEVEL SECURITY;
+   408→ALTER TABLE public.classes            ENABLE ROW LEVEL SECURITY;
+   409→ALTER TABLE public.class_members      ENABLE ROW LEVEL SECURITY;
+   410→ALTER TABLE public.lessons            ENABLE ROW LEVEL SECURITY;
+   411→ALTER TABLE public.lesson_assignments ENABLE ROW LEVEL SECURITY;
+   412→ALTER TABLE public.lesson_progress    ENABLE ROW LEVEL SECURITY;
+   413→ALTER TABLE public.quizzes            ENABLE ROW LEVEL SECURITY;
+   414→ALTER TABLE public.quiz_questions     ENABLE ROW LEVEL SECURITY;
+   415→ALTER TABLE public.quiz_assignments   ENABLE ROW LEVEL SECURITY;
+   416→ALTER TABLE public.quiz_attempts      ENABLE ROW LEVEL SECURITY;
+   417→ALTER TABLE public.quiz_answers       ENABLE ROW LEVEL SECURITY;
+   418→ALTER TABLE public.question_bank      ENABLE ROW LEVEL SECURITY;
+   419→ALTER TABLE public.notifications       ENABLE ROW LEVEL SECURITY;
+   420→
+   421→-- Helper: get current user's role (read from profiles via auth.uid())
+   422→CREATE OR REPLACE FUNCTION public.current_role()
+   423→RETURNS user_role AS $$
+   424→DECLARE r user_role;
+   425→BEGIN
+   426→  SELECT role INTO r FROM public.profiles WHERE id = auth.uid();
+   427→  RETURN r;
+   428→END;
+   429→$$ LANGUAGE plpgsql SECURITY DEFINER STABLE;
+   430→
+   431→-- Helper: is current user a member of given class?
+   432→CREATE OR REPLACE FUNCTION public.is_class_member(p_class_id UUID)
+   433→RETURNS BOOLEAN AS $$
+   434→BEGIN
+   435→  RETURN EXISTS (
+   436→    SELECT 1 FROM public.class_members
+   437→    WHERE class_id = p_class_id AND learner_id = auth.uid()
+   438→  );
+   439→END;
+   440→$$ LANGUAGE plpgsql SECURITY DEFINER STABLE;
+   441→
+   442→-- Helper: is current user the teacher of given class?
+   443→CREATE OR REPLACE FUNCTION public.is_class_teacher(p_class_id UUID)
+   444→RETURNS BOOLEAN AS $$
+   445→BEGIN
+   446→  RETURN EXISTS (
+   447→    SELECT 1 FROM public.classes
+   448→    WHERE id = p_class_id AND teacher_id = auth.uid()
+   449→  );
+   450→END;
+   451→$$ LANGUAGE plpgsql SECURITY DEFINER STABLE;
+   452→
+   453→-- Helper: is current user the teacher of given quiz?
+   454→CREATE OR REPLACE FUNCTION public.is_quiz_teacher(p_quiz_id UUID)
+   455→RETURNS BOOLEAN AS $$
+   456→BEGIN
+   457→  RETURN EXISTS (
+   458→    SELECT 1 FROM public.quizzes
+   459→    WHERE id = p_quiz_id AND teacher_id = auth.uid()
+   460→  );
+   461→END;
+   462→$$ LANGUAGE plpgsql SECURITY DEFINER STABLE;
+   463→
+   464→-- Helper: is current user the teacher of given lesson?
+   465→CREATE OR REPLACE FUNCTION public.is_lesson_teacher(p_lesson_id UUID)
+   466→RETURNS BOOLEAN AS $$
+   467→BEGIN
+   468→  RETURN EXISTS (
+   469→    SELECT 1 FROM public.lessons
+   470→    WHERE id = p_lesson_id AND teacher_id = auth.uid()
+   471→  );
+   472→END;
+   473→$$ LANGUAGE plpgsql SECURITY DEFINER STABLE;
+   474→
+   475→-- Helper: is current user assigned to a class with this quiz?
+   476→CREATE OR REPLACE FUNCTION public.is_quiz_assigned_to_me(p_quiz_id UUID)
+   477→RETURNS BOOLEAN AS $$
+   478→BEGIN
+   479→  RETURN EXISTS (
+   480→    SELECT 1 FROM public.quiz_assignments qa
+   481→    JOIN public.class_members cm ON cm.class_id = qa.class_id
+   482→    WHERE qa.quiz_id = p_quiz_id AND cm.learner_id = auth.uid()
+   483→  );
+   484→END;
+   485→$$ LANGUAGE plpgsql SECURITY DEFINER STABLE;
+   486→
+   487→-- Helper: is current user assigned to a class with this lesson?
+   488→CREATE OR REPLACE FUNCTION public.is_lesson_assigned_to_me(p_lesson_id UUID)
+   489→RETURNS BOOLEAN AS $$
+   490→BEGIN
+   491→  RETURN EXISTS (
+   492→    SELECT 1 FROM public.lesson_assignments la
+   493→    JOIN public.class_members cm ON cm.class_id = la.class_id
+   494→    WHERE la.lesson_id = p_lesson_id AND cm.learner_id = auth.uid()
+   495→  );
+   496→END;
+   497→$$ LANGUAGE plpgsql SECURITY DEFINER STABLE;
+   498→
+   499→-- ---------------------------------------------------------------------------
+   500→-- PROFILES RLS
+   501→-- ---------------------------------------------------------------------------
+   502→-- Admins see/edit all; users see/edit own profile; teachers can see profiles
+   503→-- of learners in their classes.
+   504→DROP POLICY IF EXISTS profiles_select_all ON public.profiles;
+   505→CREATE POLICY profiles_select_all ON public.profiles
+   506→  FOR SELECT USING (
+   507→    public.current_role() = 'ADMIN'
+   508→    OR id = auth.uid()
+   509→    OR EXISTS (
+   510→      SELECT 1 FROM public.class_members cm
+   511→      JOIN public.classes c ON c.id = cm.class_id
+   512→      WHERE c.teacher_id = auth.uid() AND cm.learner_id = public.profiles.id
+   513→    )
+   514→  );
+   515→
+   516→DROP POLICY IF EXISTS profiles_update_self_or_admin ON public.profiles;
+   517→CREATE POLICY profiles_update_self_or_admin ON public.profiles
+   518→  FOR UPDATE USING (
+   519→    id = auth.uid() OR public.current_role() = 'ADMIN'
+   520→  );
+   521→
+   522→DROP POLICY IF EXISTS profiles_insert_admin ON public.profiles;
+   523→CREATE POLICY profiles_insert_admin ON public.profiles
+   524→  FOR INSERT WITH CHECK (public.current_role() = 'ADMIN');
+   525→
+   526→DROP POLICY IF EXISTS profiles_delete_admin ON public.profiles;
+   527→CREATE POLICY profiles_delete_admin ON public.profiles
+   528→  FOR DELETE USING (public.current_role() = 'ADMIN');
+   529→
+   530→-- ---------------------------------------------------------------------------
+   531→-- SUBJECTS RLS — readable by all authenticated users; writable by admins
+   532→-- ---------------------------------------------------------------------------
+   533→DROP POLICY IF EXISTS subjects_select_authenticated ON public.subjects;
+   534→CREATE POLICY subjects_select_authenticated ON public.subjects
+   535→  FOR SELECT USING (auth.uid() IS NOT NULL);
+   536→
+   537→DROP POLICY IF EXISTS subjects_admin_write ON public.subjects;
+   538→CREATE POLICY subjects_admin_write ON public.subjects
+   539→  FOR ALL USING (public.current_role() = 'ADMIN')
+   540→  WITH CHECK (public.current_role() = 'ADMIN');
+   541→
+   542→-- ---------------------------------------------------------------------------
+   543→-- CLASSES RLS
+   544→-- ---------------------------------------------------------------------------
+   545→-- Admin: all. Teacher: own classes. Learner: classes where they're a member.
+   546→DROP POLICY IF EXISTS classes_select_visible ON public.classes;
+   547→CREATE POLICY classes_select_visible ON public.classes
+   548→  FOR SELECT USING (
+   549→    public.current_role() = 'ADMIN'
+   550→    OR teacher_id = auth.uid()
+   551→    OR public.is_class_member(id)
+   552→  );
+   553→
+   554→DROP POLICY IF EXISTS classes_teacher_or_admin_write ON public.classes;
+   555→CREATE POLICY classes_teacher_or_admin_write ON public.classes
+   556→  FOR ALL USING (
+   557→    public.current_role() = 'ADMIN' OR teacher_id = auth.uid()
+   558→  )
+   559→  WITH CHECK (
+   560→    public.current_role() = 'ADMIN' OR teacher_id = auth.uid()
+   561→  );
+   562→
+   563→-- ---------------------------------------------------------------------------
+   564→-- CLASS MEMBERS RLS
+   565→-- ---------------------------------------------------------------------------
+   566→-- Admin: all. Teacher: members of own classes. Learner: own memberships.
+   567→DROP POLICY IF EXISTS class_members_select_visible ON public.class_members;
+   568→CREATE POLICY class_members_select_visible ON public.class_members
+   569→  FOR SELECT USING (
+   570→    public.current_role() = 'ADMIN'
+   571→    OR learner_id = auth.uid()
+   572→    OR public.is_class_teacher(class_id)
+   573→  );
+   574→
+   575→DROP POLICY IF EXISTS class_members_teacher_or_admin_write ON public.class_members;
+   576→CREATE POLICY class_members_teacher_or_admin_write ON public.class_members
+   577→  FOR ALL USING (
+   578→    public.current_role() = 'ADMIN' OR public.is_class_teacher(class_id)
+   579→  )
+   580→  WITH CHECK (
+   581→    public.current_role() = 'ADMIN' OR public.is_class_teacher(class_id)
+   582→  );
+   583→
+   584→-- ---------------------------------------------------------------------------
+   585→-- LESSONS RLS
+   586→-- ---------------------------------------------------------------------------
+   587→-- Admin: all. Teacher: own lessons. Learner: published lessons assigned to them.
+   588→DROP POLICY IF EXISTS lessons_select_visible ON public.lessons;
+   589→CREATE POLICY lessons_select_visible ON public.lessons
+   590→  FOR SELECT USING (
+   591→    public.current_role() = 'ADMIN'
+   592→    OR teacher_id = auth.uid()
+   593→    OR (status = 'PUBLISHED' AND public.is_lesson_assigned_to_me(id))
+   594→  );
+   595→
+   596→DROP POLICY IF EXISTS lessons_teacher_or_admin_write ON public.lessons;
+   597→CREATE POLICY lessons_teacher_or_admin_write ON public.lessons
+   598→  FOR ALL USING (
+   599→    public.current_role() = 'ADMIN' OR teacher_id = auth.uid()
+   600→  )
+   601→  WITH CHECK (
+   602→    public.current_role() = 'ADMIN' OR teacher_id = auth.uid()
+   603→  );
+   604→
+   605→-- ---------------------------------------------------------------------------
+   606→-- LESSON ASSIGNMENTS RLS
+   607→-- ---------------------------------------------------------------------------
+   608→DROP POLICY IF EXISTS lesson_assignments_select_visible ON public.lesson_assignments;
+   609→CREATE POLICY lesson_assignments_select_visible ON public.lesson_assignments
+   610→  FOR SELECT USING (
+   611→    public.current_role() = 'ADMIN'
+   612→    OR public.is_lesson_teacher(lesson_id)
+   613→    OR public.is_class_member(class_id)
+   614→  );
+   615→
+   616→DROP POLICY IF EXISTS lesson_assignments_teacher_or_admin_write ON public.lesson_assignments;
+   617→CREATE POLICY lesson_assignments_teacher_or_admin_write ON public.lesson_assignments
+   618→  FOR ALL USING (
+   619→    public.current_role() = 'ADMIN' OR public.is_lesson_teacher(lesson_id)
+   620→  )
+   621→  WITH CHECK (
+   622→    public.current_role() = 'ADMIN' OR public.is_lesson_teacher(lesson_id)
+   623→  );
+   624→
+   625→-- ---------------------------------------------------------------------------
+   626→-- LESSON PROGRESS RLS — learner owns their own progress
+   627→-- ---------------------------------------------------------------------------
+   628→DROP POLICY IF EXISTS lesson_progress_select_visible ON public.lesson_progress;
+   629→CREATE POLICY lesson_progress_select_visible ON public.lesson_progress
+   630→  FOR SELECT USING (
+   631→    public.current_role() = 'ADMIN'
+   632→    OR learner_id = auth.uid()
+   633→    OR EXISTS (
+   634→      SELECT 1 FROM public.lessons l
+   635→      WHERE l.id = lesson_id AND l.teacher_id = auth.uid()
+   636→    )
+   637→  );
+   638→
+   639→DROP POLICY IF EXISTS lesson_progress_learner_or_admin_write ON public.lesson_progress;
+   640→CREATE POLICY lesson_progress_learner_or_admin_write ON public.lesson_progress
+   641→  FOR ALL USING (
+   642→    public.current_role() = 'ADMIN' OR learner_id = auth.uid()
+   643→  )
+   644→  WITH CHECK (
+   645→    public.current_role() = 'ADMIN' OR learner_id = auth.uid()
+   646→  );
+   647→
+   648→-- ---------------------------------------------------------------------------
+   649→-- QUIZZES RLS
+   650→-- ---------------------------------------------------------------------------
+   651→DROP POLICY IF EXISTS quizzes_select_visible ON public.quizzes;
+   652→CREATE POLICY quizzes_select_visible ON public.quizzes
+   653→  FOR SELECT USING (
+   654→    public.current_role() = 'ADMIN'
+   655→    OR teacher_id = auth.uid()
+   656→    OR (status = 'PUBLISHED' AND public.is_quiz_assigned_to_me(id))
+   657→  );
+   658→
+   659→DROP POLICY IF EXISTS quizzes_teacher_or_admin_write ON public.quizzes;
+   660→CREATE POLICY quizzes_teacher_or_admin_write ON public.quizzes
+   661→  FOR ALL USING (
+   662→    public.current_role() = 'ADMIN' OR teacher_id = auth.uid()
+   663→  )
+   664→  WITH CHECK (
+   665→    public.current_role() = 'ADMIN' OR teacher_id = auth.uid()
+   666→  );
+   667→
+   668→-- ---------------------------------------------------------------------------
+   669→-- QUIZ QUESTIONS RLS
+   670→-- ---------------------------------------------------------------------------
+   671→-- Teachers see their own quiz's questions (with answer keys).
+   672→-- Learners see questions of quizzes assigned to them — but answer keys
+   673→-- (correct_answer, accepted_answers, matching_pairs, marking_guide) are
+   674→-- EXCLUDED at the API layer (the API strips these fields before sending to
+   675→-- the learner). The RLS just gates row visibility.
+   676→DROP POLICY IF EXISTS quiz_questions_select_visible ON public.quiz_questions;
+   677→CREATE POLICY quiz_questions_select_visible ON public.quiz_questions
+   678→  FOR SELECT USING (
+   679→    public.current_role() = 'ADMIN'
+   680→    OR public.is_quiz_teacher(quiz_id)
+   681→    OR EXISTS (
+   682→      SELECT 1 FROM public.quizzes q
+   683→      WHERE q.id = quiz_id
+   684→        AND q.status = 'PUBLISHED'
+   685→        AND public.is_quiz_assigned_to_me(quiz_id)
+   686→    )
+   687→  );
+   688→
+   689→DROP POLICY IF EXISTS quiz_questions_teacher_or_admin_write ON public.quiz_questions;
+   690→CREATE POLICY quiz_questions_teacher_or_admin_write ON public.quiz_questions
+   691→  FOR ALL USING (
+   692→    public.current_role() = 'ADMIN' OR public.is_quiz_teacher(quiz_id)
+   693→  )
+   694→  WITH CHECK (
+   695→    public.current_role() = 'ADMIN' OR public.is_quiz_teacher(quiz_id)
+   696→  );
+   697→
+   698→-- ---------------------------------------------------------------------------
+   699→-- QUIZ ASSIGNMENTS RLS
+   700→-- ---------------------------------------------------------------------------
+   701→DROP POLICY IF EXISTS quiz_assignments_select_visible ON public.quiz_assignments;
+   702→CREATE POLICY quiz_assignments_select_visible ON public.quiz_assignments
+   703→  FOR SELECT USING (
+   704→    public.current_role() = 'ADMIN'
+   705→    OR public.is_quiz_teacher(quiz_id)
+   706→    OR public.is_class_member(class_id)
+   707→  );
+   708→
+   709→DROP POLICY IF EXISTS quiz_assignments_teacher_or_admin_write ON public.quiz_assignments;
+   710→CREATE POLICY quiz_assignments_teacher_or_admin_write ON public.quiz_assignments
+   711→  FOR ALL USING (
+   712→    public.current_role() = 'ADMIN' OR public.is_quiz_teacher(quiz_id)
+   713→  )
+   714→  WITH CHECK (
+   715→    public.current_role() = 'ADMIN' OR public.is_quiz_teacher(quiz_id)
+   716→  );
+   717→
+   718→-- ---------------------------------------------------------------------------
+   719→-- QUIZ ATTEMPTS RLS — learner owns own attempts; teacher sees attempts in
+   720→-- their quizzes; admin sees all.
+   721→-- ---------------------------------------------------------------------------
+   722→DROP POLICY IF EXISTS quiz_attempts_select_visible ON public.quiz_attempts;
+   723→CREATE POLICY quiz_attempts_select_visible ON public.quiz_attempts
+   724→  FOR SELECT USING (
+   725→    public.current_role() = 'ADMIN'
+   726→    OR learner_id = auth.uid()
+   727→    OR public.is_quiz_teacher(quiz_id)
+   728→  );
+   729→
+   730→-- Learners create their own attempts; teacher/admin cannot create attempts
+   731→-- for others.
+   732→DROP POLICY IF EXISTS quiz_attempts_learner_insert ON public.quiz_attempts;
+   733→CREATE POLICY quiz_attempts_learner_insert ON public.quiz_attempts
+   734→  FOR INSERT WITH CHECK (learner_id = auth.uid());
+   735→
+   736→-- Learners can update their own attempts (to mark as submitted).
+   737→DROP POLICY IF EXISTS quiz_attempts_learner_update ON public.quiz_attempts;
+   738→CREATE POLICY quiz_attempts_learner_update ON public.quiz_attempts
+   739→  FOR UPDATE USING (learner_id = auth.uid() OR public.current_role() = 'ADMIN');
+   740→
+   741→-- ---------------------------------------------------------------------------
+   742→-- QUIZ ANSWERS RLS — answer belongs to an attempt; learner owns attempt.
+   743→-- ---------------------------------------------------------------------------
+   744→DROP POLICY IF EXISTS quiz_answers_select_visible ON public.quiz_answers;
+   745→CREATE POLICY quiz_answers_select_visible ON public.quiz_answers
+   746→  FOR SELECT USING (
+   747→    public.current_role() = 'ADMIN'
+   748→    OR EXISTS (
+   749→      SELECT 1 FROM public.quiz_attempts qa
+   750→      WHERE qa.id = attempt_id
+   751→        AND (qa.learner_id = auth.uid() OR public.is_quiz_teacher(qa.quiz_id))
+   752→    )
+   753→  );
+   754→
+   755→DROP POLICY IF EXISTS quiz_answers_insert_learner ON public.quiz_answers;
+   756→CREATE POLICY quiz_answers_insert_learner ON public.quiz_answers
+   757→  FOR INSERT WITH CHECK (
+   758→    EXISTS (
+   759→      SELECT 1 FROM public.quiz_attempts qa
+   760→      WHERE qa.id = attempt_id AND qa.learner_id = auth.uid()
+   761→    )
+   762→  );
+   763→
+   764→DROP POLICY IF EXISTS quiz_answers_update_owner_or_teacher ON public.quiz_answers;
+   765→CREATE POLICY quiz_answers_update_owner_or_teacher ON public.quiz_answers
+   766→  FOR UPDATE USING (
+   767→    EXISTS (
+   768→      SELECT 1 FROM public.quiz_attempts qa
+   769→      WHERE qa.id = attempt_id
+   770→        AND (qa.learner_id = auth.uid() OR public.is_quiz_teacher(qa.quiz_id))
+   771→    )
+   772→  );
+   773→
+   774→-- ---------------------------------------------------------------------------
+   775→-- QUESTION BANK RLS — admin: all; teacher: own + reusable; learner: no access.
+   776→-- ---------------------------------------------------------------------------
+   777→DROP POLICY IF EXISTS question_bank_select_visible ON public.question_bank;
+   778→CREATE POLICY question_bank_select_visible ON public.question_bank
+   779→  FOR SELECT USING (
+   780→    public.current_role() = 'ADMIN' OR public.current_role() = 'TEACHER'
+   781→  );
+   782→
+   783→DROP POLICY IF EXISTS question_bank_teacher_or_admin_write ON public.question_bank;
+   784→CREATE POLICY question_bank_teacher_or_admin_write ON public.question_bank
+   785→  FOR ALL USING (
+   786→    public.current_role() = 'ADMIN'
+   787→    OR (public.current_role() = 'TEACHER' AND created_by_id = auth.uid())
+   788→  )
+   789→  WITH CHECK (
+   790→    public.current_role() = 'ADMIN'
+   791→    OR (public.current_role() = 'TEACHER' AND created_by_id = auth.uid())
+   792→  );
+   793→
+   794→-- ---------------------------------------------------------------------------
+   795→-- NOTIFICATIONS RLS — user owns own notifications.
+   796→-- ---------------------------------------------------------------------------
+   797→DROP POLICY IF EXISTS notifications_owner ON public.notifications;
+   798→CREATE POLICY notifications_owner ON public.notifications
+   799→  FOR ALL USING (user_id = auth.uid())
+   800→  WITH CHECK (user_id = auth.uid());
+   801→
+   802→-- ---------------------------------------------------------------------------
+   803→-- STORAGE POLICIES for the lesson-attachments bucket
+   804→-- ---------------------------------------------------------------------------
+   805→-- Authenticated users can read all attachments (they're public).
+   806→-- Teachers can upload into a path keyed by their user id.
+   807→-- A teacher can delete objects in their own folder; admins can delete any.
+   808→DROP POLICY IF EXISTS attachments_read ON storage.objects;
+   809→CREATE POLICY attachments_read ON storage.objects
+   810→  FOR SELECT USING (bucket_id = 'lesson-attachments' AND auth.uid() IS NOT NULL);
+   811→
+   812→DROP POLICY IF EXISTS attachments_insert ON storage.objects;
+   813→CREATE POLICY attachments_insert ON storage.objects
+   814→  FOR INSERT WITH CHECK (
+   815→    bucket_id = 'lesson-attachments'
+   816→    AND auth.uid() IS NOT NULL
+   817→    AND (storage.foldername(name))[1] = auth.uid()::text
+   818→  );
+   819→
+   820→DROP POLICY IF EXISTS attachments_update ON storage.objects;
+   821→CREATE POLICY attachments_update ON storage.objects
+   822→  FOR UPDATE USING (
+   823→    bucket_id = 'lesson-attachments'
+   824→    AND (storage.foldername(name))[1] = auth.uid()::text
+   825→  );
+   826→
+   827→DROP POLICY IF EXISTS attachments_delete ON storage.objects;
+   828→CREATE POLICY attachments_delete ON storage.objects
+   829→  FOR DELETE USING (
+   830→    bucket_id = 'lesson-attachments'
+   831→    AND (
+   832→      (storage.foldername(name))[1] = auth.uid()::text
+   833→      OR public.current_role() = 'ADMIN'
+   834→    )
+   835→  );
+   836→
+   837→-- ===========================================================================
+   838→-- DONE. Schema + RLS ready.
+   839→-- ===========================================================================
+   840→

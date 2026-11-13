@@ -1,0 +1,358 @@
+// EduQuest LMS — Prisma schema
+// Database: SQLite (sandbox) — represents the Supabase-equivalent schema for production.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// ENUMS (modeled as String for SQLite; validated in app code)
+// ---------------------------------------------------------------------------
+
+// UserRole: ADMIN | TEACHER | LEARNER
+// UserStatus: ACTIVE | DISABLED
+// LessonStatus: DRAFT | PUBLISHED | ARCHIVED
+// QuizStatus: DRAFT | PUBLISHED | CLOSED
+// Difficulty: EASY | MEDIUM | HARD | VERY_HARD
+// Curriculum: ZAMBIAN | ECZ | CAMBRIDGE | GENERAL
+// QuestionType: MULTIPLE_CHOICE | TRUE_FALSE | FILL_BLANK | SHORT_ANSWER | NUMERICAL | MATCHING
+// AttemptStatus: IN_PROGRESS | SUBMITTED | TIMED_OUT
+// ShowAnswersMode: NEVER | AFTER_SUBMISSION | AFTER_DEADLINE
+// ScorePolicy: HIGHEST | LATEST
+// NotificationType: NEW_QUIZ | NEW_LESSON | DEADLINE | SUBMISSION | RESULT | ANNOUNCEMENT | SYSTEM
+
+// ---------------------------------------------------------------------------
+// USER (profile)
+// ---------------------------------------------------------------------------
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  password     String   // bcrypt hash
+  name         String
+  role         String   @default("LEARNER") // ADMIN | TEACHER | LEARNER
+  phone        String?
+  grade        Int?     // For learners (e.g. 5..12)
+  status       String   @default("ACTIVE") // ACTIVE | DISABLED
+  avatarColor   String?  // Sidebar avatar bg color
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Teacher relationships
+  classesTaught    Class[]           @relation("ClassTeacher")
+  lessonsCreated   Lesson[]
+  quizzesCreated   Quiz[]
+  questionsCreated QuestionBank[]
+
+  // Learner relationships
+  classMemberships  ClassMember[]
+  quizAttempts      QuizAttempt[]
+  lessonProgress    LessonProgress[]
+  notifications     Notification[]
+
+  @@index([role])
+  @@index([grade])
+}
+
+// ---------------------------------------------------------------------------
+// SUBJECT
+// ---------------------------------------------------------------------------
+model Subject {
+  id          String   @id @default(cuid())
+  name        String   // "Mathematics", "Integrated Science", ...
+  code        String   @unique // "MATH", "SCI", "ENG"...
+  description String?
+  color       String?  // Tailwind palette color for badges
+  createdAt   DateTime @default(now())
+
+  classes     Class[]
+  lessons     Lesson[]
+  quizzes     Quiz[]
+  questions   QuestionBank[]
+}
+
+// ---------------------------------------------------------------------------
+// CLASS
+// ---------------------------------------------------------------------------
+model Class {
+  id          String   @id @default(cuid())
+  name        String   // "Grade 7 Purple Mathematics"
+  grade       Int      // 5..12
+  subjectId   String
+  subject     Subject  @relation(fields: [subjectId], references: [id])
+  description String?
+  classCode   String   @unique // "G7PM-2025"
+  teacherId   String
+  teacher     User     @relation("ClassTeacher", fields: [teacherId], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members          ClassMember[]
+  lessonAssignments LessonAssignment[]
+  quizAssignments  QuizAssignment[]
+
+  @@index([teacherId])
+  @@index([subjectId])
+}
+
+model ClassMember {
+  id         String   @id @default(cuid())
+  classId    String
+  learnerId  String
+  enrolledAt DateTime @default(now())
+
+  class    Class @relation(fields: [classId], references: [id], onDelete: Cascade)
+  learner  User  @relation(fields: [learnerId], references: [id], onDelete: Cascade)
+
+  @@unique([classId, learnerId])
+  @@index([learnerId])
+}
+
+// ---------------------------------------------------------------------------
+// LESSONS
+// ---------------------------------------------------------------------------
+model Lesson {
+  id                String   @id @default(cuid())
+  title             String
+  grade             Int
+  subjectId         String
+  subject           Subject  @relation(fields: [subjectId], references: [id])
+  topic             String   // "Fractions", "States of Matter"
+  objectives        String   // Markdown / plain — learning objectives
+  notes             String   // Markdown / rich text — lesson notes
+  activities        String?  // Teaching activities
+  examples          String?  // Examples
+  practiceQuestions String? // Practice questions
+  homework          String?  // Homework
+  summary          String?  // Lesson summary
+  attachments       String?  // JSON-stringified array of {name, url, type}
+  videoLinks        String?  // JSON-stringified array of strings
+  status            String   @default("DRAFT") // DRAFT | PUBLISHED | ARCHIVED
+  teacherId         String
+  teacher           User     @relation(fields: [teacherId], references: [id])
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  assignments LessonAssignment[]
+  progress    LessonProgress[]
+
+  @@index([teacherId])
+  @@index([subjectId])
+  @@index([status])
+}
+
+model LessonAssignment {
+  id        String    @id @default(cuid())
+  lessonId  String
+  classId   String
+  dueDate   DateTime?
+  assignedAt DateTime @default(now())
+
+  lesson    Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  class     Class  @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  @@unique([lessonId, classId])
+  @@index([classId])
+}
+
+model LessonProgress {
+  id         String   @id @default(cuid())
+  lessonId   String
+  learnerId  String
+  completed  Boolean  @default(false)
+  completedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  lesson   Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  learner  User   @relation(fields: [learnerId], references: [id], onDelete: Cascade)
+
+  @@unique([lessonId, learnerId])
+  @@index([learnerId])
+}
+
+// ---------------------------------------------------------------------------
+// QUIZZES
+// ---------------------------------------------------------------------------
+model Quiz {
+  id                  String   @id @default(cuid())
+  title               String
+  grade               Int
+  subjectId           String
+  subject             Subject  @relation(fields: [subjectId], references: [id])
+  topic               String
+  description         String?
+  difficulty          String   @default("MEDIUM") // EASY | MEDIUM | HARD | VERY_HARD
+  curriculum          String   @default("ZAMBIAN") // ZAMBIAN | ECZ | CAMBRIDGE | GENERAL
+  instructions        String?
+  timeLimit           Int      @default(30) // minutes (0 = no limit)
+  passingScore        Int      @default(50) // percentage
+  maxAttempts         Int      @default(1) // 0 = unlimited
+  randomQuestionOrder Boolean  @default(false)
+  randomAnswerOrder   Boolean  @default(false)
+  allowRetakes        Boolean  @default(true)
+  showAnswers         String   @default("AFTER_SUBMISSION") // NEVER | AFTER_SUBMISSION | AFTER_DEADLINE
+  showExplanations    Boolean  @default(true)
+  scorePolicy         String   @default("HIGHEST") // HIGHEST | LATEST
+  status              String   @default("DRAFT") // DRAFT | PUBLISHED | CLOSED
+  teacherId           String
+  teacher             User     @relation(fields: [teacherId], references: [id])
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  questions   QuizQuestion[]
+  assignments QuizAssignment[]
+  attempts    QuizAttempt[]
+
+  @@index([teacherId])
+  @@index([subjectId])
+  @@index([status])
+}
+
+model QuizQuestion {
+  id               String        @id @default(cuid())
+  quizId           String
+  quiz             Quiz          @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  type             String        // MULTIPLE_CHOICE | TRUE_FALSE | FILL_BLANK | SHORT_ANSWER | NUMERICAL | MATCHING
+  questionText     String
+  // JSON-stringified structured fields. Decoded on read:
+  //   options:        string[] (for MC)
+  //   correctAnswer:  string | number | boolean | Record<string,string> (matching)
+  //   acceptedAnswers: string[] (for FILL_BLANK — case-insensitive matches)
+  //   matchingPairs:  { left: string, right: string }[] (for MATCHING)
+  //   markingGuide:   string (for SHORT_ANSWER — teacher-approved guide, hidden from learner)
+  //   numericalTolerance: number (for NUMERICAL, default 0.01)
+  optionsJson          String?
+  correctAnswerJson    String?
+  acceptedAnswersJson  String?
+  matchingPairsJson    String?
+  markingGuide         String?
+  numericalTolerance    Float?
+  markAllocation       Int          @default(1)
+  explanation          String?
+  order                Int          @default(0)
+  questionBankId       String?
+  questionBank         QuestionBank? @relation(fields: [questionBankId], references: [id])
+  createdAt            DateTime     @default(now())
+
+  answers QuizAnswer[]
+
+  @@index([quizId])
+  @@index([order])
+}
+
+model QuizAssignment {
+  id        String    @id @default(cuid())
+  quizId    String
+  classId   String
+  startDate DateTime?
+  endDate   DateTime? // deadline
+  createdAt DateTime  @default(now())
+
+  quiz    Quiz  @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  class   Class @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  attempts QuizAttempt[]
+
+  @@unique([quizId, classId])
+  @@index([classId])
+}
+
+model QuizAttempt {
+  id              String    @id @default(cuid())
+  quizId          String
+  quiz            Quiz      @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  learnerId       String
+  learner         User      @relation(fields: [learnerId], references: [id], onDelete: Cascade)
+  assignmentId    String?
+  assignment      QuizAssignment? @relation(fields: [assignmentId], references: [id])
+  attemptNumber   Int       @default(1)
+  startedAt       DateTime  @default(now())
+  submittedAt     DateTime?
+  status          String    @default("IN_PROGRESS") // IN_PROGRESS | SUBMITTED | TIMED_OUT
+  score           Float?    // raw score
+  maxScore        Float?
+  percentage      Float?
+  grade           String?   // A | B | C | D | F
+  passed          Boolean?
+  timeSpent       Int?      // seconds
+  createdAt       DateTime  @default(now())
+
+  answers QuizAnswer[]
+
+  @@index([quizId])
+  @@index([learnerId])
+  @@index([assignmentId])
+}
+
+model QuizAnswer {
+  id                String   @id @default(cuid())
+  attemptId         String
+  attempt           QuizAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId        String
+  question          QuizQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  // JSON-encoded learner answer (string | boolean | number | Record<string,string>)
+  learnerAnswerJson String?
+  isCorrect         Boolean?
+  marksAwarded      Float?
+  aiMarkingResult   String? // JSON: {feedback, partialMarks, confidence, model}
+  teacherOverride   Boolean  @default(false)
+  gradedAt          DateTime?
+
+  @@unique([attemptId, questionId])
+  @@index([questionId])
+}
+
+// ---------------------------------------------------------------------------
+// QUESTION BANK (reusable questions)
+// ---------------------------------------------------------------------------
+model QuestionBank {
+  id                  String   @id @default(cuid())
+  grade               Int
+  subjectId           String
+  subject             Subject  @relation(fields: [subjectId], references: [id])
+  topic               String
+  type                String
+  questionText        String
+  optionsJson         String?
+  correctAnswerJson   String?
+  acceptedAnswersJson String?
+  matchingPairsJson   String?
+  markingGuide        String?
+  numericalTolerance  Float?
+  markAllocation      Int      @default(1)
+  explanation         String?
+  difficulty          String   @default("MEDIUM")
+  createdById         String
+  createdBy           User     @relation(fields: [createdById], references: [id])
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  quizQuestions QuizQuestion[]
+
+  @@index([subjectId])
+  @@index([topic])
+  @@index([createdById])
+}
+
+// ---------------------------------------------------------------------------
+// NOTIFICATIONS
+// ---------------------------------------------------------------------------
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String   // NEW_QUIZ | NEW_LESSON | DEADLINE | SUBMISSION | RESULT | ANNOUNCEMENT | SYSTEM
+  title     String
+  message   String
+  dataJson  String?  // JSON-encoded payload (quizId, classId, etc.)
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+  @@index([createdAt])
+}

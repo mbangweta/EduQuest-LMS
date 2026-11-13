@@ -1,0 +1,630 @@
+     1→'use client'
+     2→
+     3→import { useEffect, useState } from 'react'
+     4→import { toast } from 'sonner'
+     5→import { format } from 'date-fns'
+     6→import {
+     7→  ArrowLeft, Copy, Users, FileText, FileQuestion, Plus, Trash2, UserPlus,
+     8→  BarChart3, Loader2, MessageCircle,
+     9→} from 'lucide-react'
+    10→import { useRouter } from '@/lib/router'
+    11→import { api } from '@/lib/api-client'
+    12→
+    13→import { Button } from '@/components/ui/button'
+    14→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+    15→import { Badge } from '@/components/ui/badge'
+    16→import { Input } from '@/components/ui/input'
+    17→import { Label } from '@/components/ui/label'
+    18→import { Skeleton } from '@/components/ui/skeleton'
+    19→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    20→import {
+    21→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+    22→} from '@/components/ui/select'
+    23→import {
+    24→  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
+    25→} from '@/components/ui/dialog'
+    26→import {
+    27→  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+    28→} from '@/components/ui/table'
+    29→import { Checkbox } from '@/components/ui/checkbox'
+    30→import { EmptyState } from '@/components/views/shared/empty-state'
+    31→import { UserAvatar } from '@/components/views/shared/user-avatar'
+    32→import { ConfirmDialog } from '@/components/views/shared/confirm-dialog'
+    33→import { ClassChatView } from '@/components/views/shared/class-chat-view'
+    34→import { ClassEnrollmentButtons } from '@/components/views/shared/class-enrollment-buttons'
+    35→import { CreateAssessmentDialog } from '@/components/views/shared/create-assessment-dialog'
+    36→import { RecordScoresGrid } from '@/components/views/shared/record-scores-grid'
+    37→
+    38→export function TeacherClassDetailView({ classId }: { classId?: string }) {
+    39→  const { navigate } = useRouter()
+    40→  const [cls, setCls] = useState<any>(null)
+    41→  const [loading, setLoading] = useState(true)
+    42→  const [addLearnerOpen, setAddLearnerOpen] = useState(false)
+    43→  const [addMode, setAddMode] = useState<'existing' | 'new'>('existing')
+    44→  const [email, setEmail] = useState('')
+    45→  // New learner creation fields
+    46→  const [newFirstName, setNewFirstName] = useState('')
+    47→  const [newLastName, setNewLastName] = useState('')
+    48→  const [createdLearnerInfo, setCreatedLearnerInfo] = useState<{ email: string; password: string; name: string } | null>(null)
+    49→  const [assignOpen, setAssignOpen] = useState<'lesson' | 'quiz' | null>(null)
+    50→  const [myLessons, setMyLessons] = useState<any[]>([])
+    51→  const [myQuizzes, setMyQuizzes] = useState<any[]>([])
+    52→  const [selectedLessons, setSelectedLessons] = useState<string[]>([])
+    53→  const [selectedQuizzes, setSelectedQuizzes] = useState<string[]>([])
+    54→  const [startDate, setStartDate] = useState('')
+    55→  const [endDate, setEndDate] = useState('')
+    56→  const [toRemove, setToRemove] = useState<string | null>(null)
+    57→  const [saving, setSaving] = useState(false)
+    58→
+    59→  async function load() {
+    60→    if (!classId) return
+    61→    setLoading(true)
+    62→    try {
+    63→      const { class: c } = await api.get<{ class: any }>(`/api/classes/${classId}`)
+    64→      setCls(c)
+    65→    } catch (e: any) {
+    66→      toast.error(e?.message || 'Failed to load class')
+    67→    } finally {
+    68→      setLoading(false)
+    69→    }
+    70→  }
+    71→  useEffect(() => { load() }, [classId])
+    72→
+    73→  // Refresh class data after a bulk enrollment import
+    74→  useEffect(() => {
+    75→    const handler = () => load()
+    76→    window.addEventListener('class-members-updated', handler)
+    77→    return () => window.removeEventListener('class-members-updated', handler)
+    78→  }, [classId])
+    79→
+    80→  async function openAssign(type: 'lesson' | 'quiz') {
+    81→    setAssignOpen(type)
+    82→    setSelectedLessons([])
+    83→    setSelectedQuizzes([])
+    84→    setStartDate('')
+    85→    setEndDate('')
+    86→    if (type === 'lesson') {
+    87→      const r = await api.get<{ lessons: any[] }>('/api/lessons?status=PUBLISHED')
+    88→      setMyLessons(r.lessons)
+    89→    } else {
+    90→      const r = await api.get<{ quizzes: any[] }>('/api/quizzes?status=PUBLISHED')
+    91→      setMyQuizzes(r.quizzes)
+    92→    }
+    93→  }
+    94→
+    95→  async function addLearner() {
+    96→    if (!email) return
+    97→    setSaving(true)
+    98→    try {
+    99→      await api.post(`/api/classes/${classId}/members`, { email })
+   100→      toast.success('Learner added')
+   101→      setEmail('')
+   102→      setAddLearnerOpen(false)
+   103→      load()
+   104→    } catch (e: any) {
+   105→      toast.error(e?.message || 'Failed to add learner')
+   106→    } finally { setSaving(false) }
+   107→  }
+   108→
+   109→  async function createAndEnrollLearner() {
+   110→    if (!newFirstName.trim() || !newLastName.trim()) {
+   111→      toast.error('First name and last name are required')
+   112→      return
+   113→    }
+   114→    if (!cls?.grade) {
+   115→      toast.error('Class grade not found')
+   116→      return
+   117→    }
+   118→    setSaving(true)
+   119→    try {
+   120→      // 1. Create the learner via the users API (auto-generates email + password)
+   121→      const res = await api.post<any>('/api/users', {
+   122→        firstName: newFirstName.trim(),
+   123→        lastName: newLastName.trim(),
+   124→        role: 'LEARNER',
+   125→        grade: cls.grade,
+   126→        // schoolId is auto-set by the API based on the teacher's school
+   127→      })
+   128→      const learnerId = res.user?.id
+   129→      const genEmail = res.generatedEmail || res.user?.email || ''
+   130→      const genPassword = res.generatedPassword || 'eduquest123'
+   131→      setCreatedLearnerInfo({
+   132→        email: genEmail,
+   133→        password: genPassword,
+   134→        name: `${newFirstName.trim()} ${newLastName.trim()}`,
+   135→      })
+   136→      // 2. Enroll the learner in this class
+   137→      if (learnerId) {
+   138→        await api.post(`/api/classes/${classId}/members`, { userId: learnerId })
+   139→      }
+   140→      toast.success(`Learner created and enrolled — ${genEmail}`)
+   141→      setNewFirstName('')
+   142→      setNewLastName('')
+   143→      load()
+   144→    } catch (e: any) {
+   145→      toast.error(e?.message || 'Failed to create learner')
+   146→    } finally {
+   147→      setSaving(false)
+   148→    }
+   149→  }
+   150→
+   151→  async function removeLearner() {
+   152→    if (!toRemove) return
+   153→    try {
+   154→      await api.del(`/api/classes/${classId}/members/${toRemove}`)
+   155→      toast.success('Learner removed')
+   156→      setToRemove(null)
+   157→      load()
+   158→    } catch (e: any) { toast.error(e?.message || 'Failed') }
+   159→  }
+   160→
+   161→  async function assignLessons() {
+   162→    setSaving(true)
+   163→    try {
+   164→      for (const lessonId of selectedLessons) {
+   165→        await api.post(`/api/lessons/${lessonId}/assign`, { classId })
+   166→      }
+   167→      toast.success(`${selectedLessons.length} lesson(s) assigned`)
+   168→      setAssignOpen(null)
+   169→      load()
+   170→    } catch (e: any) { toast.error(e?.message || 'Failed') }
+   171→    finally { setSaving(false) }
+   172→  }
+   173→  async function assignQuizzes() {
+   174→    setSaving(true)
+   175→    try {
+   176→      for (const quizId of selectedQuizzes) {
+   177→        await api.post(`/api/quizzes/${quizId}/assign`, { classId, startDate: startDate || undefined, endDate: endDate || undefined })
+   178→      }
+   179→      toast.success(`${selectedQuizzes.length} quiz(zes) assigned`)
+   180→      setAssignOpen(null)
+   181→      load()
+   182→    } catch (e: any) { toast.error(e?.message || 'Failed') }
+   183→    finally { setSaving(false) }
+   184→  }
+   185→
+   186→  function copyCode() {
+   187→    if (cls?.classCode) {
+   188→      navigator.clipboard.writeText(cls.classCode)
+   189→      toast.success('Class code copied')
+   190→    }
+   191→  }
+   192→
+   193→  if (loading) return <div className="p-6 space-y-3"><Skeleton className="h-12" /><Skeleton className="h-64" /></div>
+   194→  if (!cls) return <EmptyState title="Class not found" description="This class may have been removed." />
+   195→
+   196→  return (
+   197→    <div className="p-4 lg:p-6 space-y-4">
+   198→      <Button variant="ghost" size="sm" onClick={() => navigate('teacher.classes')}>
+   199→        <ArrowLeft className="mr-2 h-4 w-4" /> Back to classes
+   200→      </Button>
+   201→
+   202→      <Card>
+   203→        <CardContent className="p-5">
+   204→          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+   205→            <div className="min-w-0 flex-1">
+   206→              <div className="flex items-center gap-2 flex-wrap mb-1">
+   207→                <h1 className="text-2xl font-bold">{cls.name}</h1>
+   208→                <Badge variant="secondary">Grade {cls.grade}</Badge>
+   209→                {cls.subject?.name && <Badge variant="outline">{cls.subject.name}</Badge>}
+   210→              </div>
+   211→              {cls.description && <p className="text-sm text-muted-foreground mb-3">{cls.description}</p>}
+   212→              <div className="flex items-center gap-2 text-sm">
+   213→                <span className="text-muted-foreground">Class code:</span>
+   214→                <button onClick={copyCode} className="flex items-center gap-1 rounded-md bg-muted px-2 py-1 font-mono text-sm hover:bg-muted/70">
+   215→                  {cls.classCode} <Copy className="h-3 w-3" />
+   216→                </button>
+   217→              </div>
+   218→              <div className="mt-3">
+   219→                <CreateAssessmentDialog
+   220→                  classId={classId || ''}
+   221→                  grade={cls.grade}
+   222→                  className={cls.name}
+   223→                />
+   224→              </div>
+   225→            </div>
+   226→            <div className="flex gap-4 text-sm">
+   227→              <div className="text-center">
+   228→                <div className="text-2xl font-bold text-primary">{cls._count?.members ?? 0}</div>
+   229→                <div className="text-xs text-muted-foreground">Learners</div>
+   230→              </div>
+   231→              <div className="text-center">
+   232→                <div className="text-2xl font-bold text-primary">{cls._count?.lessonAssignments ?? 0}</div>
+   233→                <div className="text-xs text-muted-foreground">Lessons</div>
+   234→              </div>
+   235→              <div className="text-center">
+   236→                <div className="text-2xl font-bold text-primary">{cls._count?.quizAssignments ?? 0}</div>
+   237→                <div className="text-xs text-muted-foreground">Quizzes</div>
+   238→              </div>
+   239→            </div>
+   240→          </div>
+   241→        </CardContent>
+   242→      </Card>
+   243→
+   244→      <Tabs defaultValue="learners">
+   245→        <TabsList>
+   246→          <TabsTrigger value="learners"><Users className="mr-2 h-4 w-4" /> Learners</TabsTrigger>
+   247→          <TabsTrigger value="scores"><BarChart3 className="mr-2 h-4 w-4" /> Record Scores</TabsTrigger>
+   248→          <TabsTrigger value="lessons"><FileText className="mr-2 h-4 w-4" /> Lessons</TabsTrigger>
+   249→          <TabsTrigger value="quizzes"><FileQuestion className="mr-2 h-4 w-4" /> Quizzes</TabsTrigger>
+   250→          <TabsTrigger value="performance"><BarChart3 className="mr-2 h-4 w-4" /> Performance</TabsTrigger>
+   251→          <TabsTrigger value="chat"><MessageCircle className="mr-2 h-4 w-4" /> Discussion</TabsTrigger>
+   252→        </TabsList>
+   253→
+   254→        {/* Learners tab */}
+   255→        <TabsContent value="learners">
+   256→          <Card>
+   257→            <CardHeader className="flex-row items-center justify-between flex-wrap gap-2">
+   258→              <CardTitle className="text-base">Enrolled Learners</CardTitle>
+   259→              <div className="flex items-center gap-2 flex-wrap">
+   260→                <ClassEnrollmentButtons
+   261→                  classId={classId || ''}
+   262→                  className={cls?.name || ''}
+   263→                  classGrade={cls?.grade || 5}
+   264→                />
+   265→                <Button size="sm" onClick={() => setAddLearnerOpen(true)}>
+   266→                  <UserPlus className="mr-2 h-4 w-4" /> Add Learner
+   267→                </Button>
+   268→              </div>
+   269→            </CardHeader>
+   270→            <CardContent>
+   271→              {(cls.members ?? []).length === 0 ? (
+   272→                <EmptyState title="No learners enrolled" description="Add learners by email or share the class code." />
+   273→              ) : (
+   274→                <Table>
+   275→                  <TableHeader>
+   276→                    <TableRow>
+   277→                      <TableHead>Learner</TableHead>
+   278→                      <TableHead>Email</TableHead>
+   279→                      <TableHead>Grade</TableHead>
+   280→                      <TableHead>Enrolled</TableHead>
+   281→                      <TableHead className="text-right">Action</TableHead>
+   282→                    </TableRow>
+   283→                  </TableHeader>
+   284→                  <TableBody>
+   285→                    {cls.members?.map((m: any) => (
+   286→                      <TableRow key={m.id}>
+   287→                        <TableCell>
+   288→                          <div className="flex items-center gap-2">
+   289→                            <UserAvatar name={m.learner.name} color={m.learner.avatarColor} size="sm" />
+   290→                            <span className="font-medium text-sm">{m.learner.name}</span>
+   291→                          </div>
+   292→                        </TableCell>
+   293→                        <TableCell className="text-sm">{m.learner.email}</TableCell>
+   294→                        <TableCell className="text-sm">{m.learner.grade ? `Grade ${m.learner.grade}` : '—'}</TableCell>
+   295→                        <TableCell className="text-xs text-muted-foreground">{m.enrolledAt ? format(new Date(m.enrolledAt), 'MMM d, yyyy') : '—'}</TableCell>
+   296→                        <TableCell className="text-right">
+   297→                          <Button variant="ghost" size="icon" onClick={() => setToRemove(m.learnerId)}>
+   298→                            <Trash2 className="h-4 w-4 text-destructive" />
+   299→                          </Button>
+   300→                        </TableCell>
+   301→                      </TableRow>
+   302→                    ))}
+   303→                  </TableBody>
+   304→                </Table>
+   305→              )}
+   306→            </CardContent>
+   307→          </Card>
+   308→        </TabsContent>
+   309→
+   310→        {/* Record Scores tab — editable grid with all 10 subjects */}
+   311→        <TabsContent value="scores">
+   312→          <RecordScoresGrid classId={classId || ''} grade={cls?.grade || 5} />
+   313→        </TabsContent>
+   314→
+   315→        {/* Lessons tab */}
+   316→        <TabsContent value="lessons">
+   317→          <Card>
+   318→            <CardHeader className="flex-row items-center justify-between">
+   319→              <CardTitle className="text-base">Assigned Lessons</CardTitle>
+   320→              <Button size="sm" onClick={() => openAssign('lesson')}>
+   321→                <Plus className="mr-2 h-4 w-4" /> Assign Lesson
+   322→              </Button>
+   323→            </CardHeader>
+   324→            <CardContent>
+   325→              {(cls.lessonAssignments ?? []).length === 0 ? (
+   326→                <EmptyState title="No lessons assigned" description="Assign a lesson to this class." />
+   327→              ) : (
+   328→                <div className="space-y-2">
+   329→                  {cls.lessonAssignments?.map((la: any) => (
+   330→                    <div key={la.id} className="flex items-center justify-between rounded-md border p-3">
+   331→                      <div>
+   332→                        <div className="font-medium text-sm">{la.lesson.title}</div>
+   333→                        <div className="text-xs text-muted-foreground">{la.lesson.topic} · Grade {la.lesson.grade}</div>
+   334→                      </div>
+   335→                      <div className="text-xs text-muted-foreground">
+   336→                        Due: {la.dueDate ? format(new Date(la.dueDate), 'MMM d, yyyy') : 'No deadline'}
+   337→                      </div>
+   338→                    </div>
+   339→                  ))}
+   340→                </div>
+   341→              )}
+   342→            </CardContent>
+   343→          </Card>
+   344→        </TabsContent>
+   345→
+   346→        {/* Quizzes tab */}
+   347→        <TabsContent value="quizzes">
+   348→          <Card>
+   349→            <CardHeader className="flex-row items-center justify-between">
+   350→              <CardTitle className="text-base">Assigned Quizzes</CardTitle>
+   351→              <Button size="sm" onClick={() => openAssign('quiz')}>
+   352→                <Plus className="mr-2 h-4 w-4" /> Assign Quiz
+   353→              </Button>
+   354→            </CardHeader>
+   355→            <CardContent>
+   356→              {(cls.quizAssignments ?? []).length === 0 ? (
+   357→                <EmptyState title="No quizzes assigned" description="Assign a quiz to this class." />
+   358→              ) : (
+   359→                <div className="space-y-2">
+   360→                  {cls.quizAssignments?.map((qa: any) => (
+   361→                    <div key={qa.id} className="flex items-center justify-between rounded-md border p-3">
+   362→                      <div>
+   363→                        <div className="font-medium text-sm">{qa.quiz.title}</div>
+   364→                        <div className="text-xs text-muted-foreground">{qa.quiz.topic} · Passing {qa.quiz.passingScore}%</div>
+   365→                      </div>
+   366→                      <div className="text-xs text-muted-foreground text-right">
+   367→                        <div>Opens: {qa.startDate ? format(new Date(qa.startDate), 'MMM d') : 'now'}</div>
+   368→                        <div>Closes: {qa.endDate ? format(new Date(qa.endDate), 'MMM d') : 'no end'}</div>
+   369→                      </div>
+   370→                    </div>
+   371→                  ))}
+   372→                </div>
+   373→              )}
+   374→            </CardContent>
+   375→          </Card>
+   376→        </TabsContent>
+   377→
+   378→        {/* Performance tab */}
+   379→        <TabsContent value="performance">
+   380→          <Card>
+   381→            <CardHeader><CardTitle className="text-base">Class Performance</CardTitle></CardHeader>
+   382→            <CardContent>
+   383→              <ClassPerformance classId={classId!} />
+   384→            </CardContent>
+   385→          </Card>
+   386→        </TabsContent>
+   387→
+   388→        {/* Discussion tab */}
+   389→        <TabsContent value="chat">
+   390→          <ClassChatView classId={classId} />
+   391→        </TabsContent>
+   392→      </Tabs>
+   393→
+   394→      {/* Add learner dialog */}
+   395→      <Dialog open={addLearnerOpen} onOpenChange={(v) => { setAddLearnerOpen(v); if (!v) { setCreatedLearnerInfo(null); setAddMode('existing') } }}>
+   396→        <DialogContent>
+   397→          <DialogHeader><DialogTitle>Add Learner to {cls?.name}</DialogTitle></DialogHeader>
+   398→
+   399→          {createdLearnerInfo ? (
+   400→            <div className="space-y-4">
+   401→              <div className="rounded-lg border border-accent/30 bg-accent/10 p-4 space-y-2">
+   402→                <p className="text-sm font-semibold text-accent">Learner created and enrolled!</p>
+   403→                <div className="space-y-1 text-sm">
+   404→                  <div><span className="text-muted-foreground">Name:</span> {createdLearnerInfo.name}</div>
+   405→                  <div><span className="text-muted-foreground">Email:</span> <code className="font-mono">{createdLearnerInfo.email}</code></div>
+   406→                  <div><span className="text-muted-foreground">Password:</span> <code className="font-mono">{createdLearnerInfo.password}</code></div>
+   407→                </div>
+   408→                <p className="text-xs text-muted-foreground">The learner can change their password after logging in.</p>
+   409→              </div>
+   410→              <div className="flex gap-2">
+   411→                <Button variant="outline" onClick={() => { setAddLearnerOpen(false); setCreatedLearnerInfo(null) }}>Done</Button>
+   412→                <Button onClick={() => { setCreatedLearnerInfo(null); setNewFirstName(''); setNewLastName('') }}>Add another</Button>
+   413→              </div>
+   414→            </div>
+   415→          ) : (
+   416→            <div className="space-y-3">
+   417→              {/* Tab buttons */}
+   418→              <div className="flex gap-1 border-b">
+   419→                <button
+   420→                  onClick={() => setAddMode('existing')}
+   421→                  className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+   422→                    addMode === 'existing' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'
+   423→                  }`}
+   424→                >
+   425→                  Add Existing
+   426→                </button>
+   427→                <button
+   428→                  onClick={() => setAddMode('new')}
+   429→                  className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+   430→                    addMode === 'new' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'
+   431→                  }`}
+   432→                >
+   433→                  Create New
+   434→                </button>
+   435→              </div>
+   436→
+   437→              {addMode === 'existing' ? (
+   438→                <div className="space-y-3">
+   439→                  <div className="space-y-1.5">
+   440→                    <Label htmlFor="email">Learner Email</Label>
+   441→                    <Input id="email" type="email" placeholder="learner@eduquest.zm" value={email} onChange={(e) => setEmail(e.target.value)} />
+   442→                  </div>
+   443→                  <div className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">
+   444→                    Tip: To invite learners via class code, share the code <span className="font-mono">{cls?.classCode}</span>. They can join from their learner dashboard.
+   445→                  </div>
+   446→                  <DialogFooter>
+   447→                    <Button variant="outline" onClick={() => setAddLearnerOpen(false)}>Cancel</Button>
+   448→                    <Button onClick={addLearner} disabled={saving || !email}>
+   449→                      {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Add
+   450→                    </Button>
+   451→                  </DialogFooter>
+   452→                </div>
+   453→              ) : (
+   454→                <div className="space-y-3">
+   455→                  <div className="grid grid-cols-2 gap-3">
+   456→                    <div className="space-y-1.5">
+   457→                      <Label htmlFor="newFirstName">First name *</Label>
+   458→                      <Input id="newFirstName" value={newFirstName} onChange={(e) => setNewFirstName(e.target.value)} placeholder="Thabo" />
+   459→                    </div>
+   460→                    <div className="space-y-1.5">
+   461→                      <Label htmlFor="newLastName">Last name *</Label>
+   462→                      <Input id="newLastName" value={newLastName} onChange={(e) => setNewLastName(e.target.value)} placeholder="Mumba" />
+   463→                    </div>
+   464→                  </div>
+   465→                  <div className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground space-y-0.5">
+   466→                    <p>Grade: <span className="font-medium text-foreground">{cls?.grade || '—'}</span> (auto-set from this class)</p>
+   467→                    <p>Email: <code className="font-mono text-foreground">
+   468→                      {newFirstName && newLastName
+   469→                        ? `${newFirstName.toLowerCase()}.${newLastName.toLowerCase().replace(/\s+/g, '')}@eduquest.zm`
+   470→                        : 'firstname.lastname@eduquest.zm'}
+   471→                    </code></p>
+   472→                    <p>Password: <code className="font-mono text-foreground">eduquest123</code></p>
+   473→                  </div>
+   474→                  <DialogFooter>
+   475→                    <Button variant="outline" onClick={() => setAddLearnerOpen(false)}>Cancel</Button>
+   476→                    <Button
+   477→                      onClick={createAndEnrollLearner}
+   478→                      disabled={saving || !newFirstName.trim() || !newLastName.trim()}
+   479→                    >
+   480→                      {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+   481→                      Create & Enroll
+   482→                    </Button>
+   483→                  </DialogFooter>
+   484→                </div>
+   485→              )}
+   486→            </div>
+   487→          )}
+   488→        </DialogContent>
+   489→      </Dialog>
+   490→
+   491→      {/* Assign dialog */}
+   492→      <Dialog open={!!assignOpen} onOpenChange={(o) => !o && setAssignOpen(null)}>
+   493→        <DialogContent className="max-w-lg">
+   494→          <DialogHeader>
+   495→            <DialogTitle>Assign {assignOpen === 'lesson' ? 'Lessons' : 'Quizzes'} to {cls.name}</DialogTitle>
+   496→          </DialogHeader>
+   497→          <div className="space-y-3 max-h-[60vh] overflow-y-auto scroll-thin">
+   498→            {assignOpen === 'lesson' && (
+   499→              myLessons.length === 0 ? (
+   500→                <p className="text-sm text-muted-foreground text-center py-4">You have no published lessons. Publish one first.</p>
+   501→              ) : myLessons.map((l) => (
+   502→                <label key={l.id} className="flex items-start gap-3 rounded-md border p-3 cursor-pointer hover:bg-accent/10">
+   503→                  <Checkbox
+   504→                    checked={selectedLessons.includes(l.id)}
+   505→                    onCheckedChange={(v) => setSelectedLessons(v ? [...selectedLessons, l.id] : selectedLessons.filter((x) => x !== l.id))}
+   506→                  />
+   507→                  <div className="flex-1 min-w-0">
+   508→                    <div className="font-medium text-sm">{l.title}</div>
+   509→                    <div className="text-xs text-muted-foreground">{l.topic} · Grade {l.grade}</div>
+   510→                  </div>
+   511→                </label>
+   512→              ))
+   513→            )}
+   514→            {assignOpen === 'quiz' && (
+   515→              <>
+   516→                {myQuizzes.length === 0 ? (
+   517→                  <p className="text-sm text-muted-foreground text-center py-4">You have no published quizzes.</p>
+   518→                ) : myQuizzes.map((q) => (
+   519→                  <label key={q.id} className="flex items-start gap-3 rounded-md border p-3 cursor-pointer hover:bg-accent/10">
+   520→                    <Checkbox
+   521→                      checked={selectedQuizzes.includes(q.id)}
+   522→                      onCheckedChange={(v) => setSelectedQuizzes(v ? [...selectedQuizzes, q.id] : selectedQuizzes.filter((x) => x !== q.id))}
+   523→                    />
+   524→                    <div className="flex-1 min-w-0">
+   525→                      <div className="font-medium text-sm">{q.title}</div>
+   526→                      <div className="text-xs text-muted-foreground">{q.topic} · Grade {q.grade} · {q.timeLimit} min</div>
+   527→                    </div>
+   528→                  </label>
+   529→                ))}
+   530→                <div className="grid grid-cols-2 gap-3 pt-2 border-t">
+   531→                  <div>
+   532→                    <Label className="text-xs">Start Date (optional)</Label>
+   533→                    <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+   534→                  </div>
+   535→                  <div>
+   536→                    <Label className="text-xs">End Date (deadline)</Label>
+   537→                    <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+   538→                  </div>
+   539→                </div>
+   540→              </>
+   541→            )}
+   542→          </div>
+   543→          <DialogFooter>
+   544→            <Button variant="outline" onClick={() => setAssignOpen(null)}>Cancel</Button>
+   545→            <Button
+   546→              onClick={assignOpen === 'lesson' ? assignLessons : assignQuizzes}
+   547→              disabled={saving || (assignOpen === 'lesson' ? selectedLessons.length === 0 : selectedQuizzes.length === 0)}
+   548→            >
+   549→              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Assign
+   550→            </Button>
+   551→          </DialogFooter>
+   552→        </DialogContent>
+   553→      </Dialog>
+   554→
+   555→      <ConfirmDialog
+   556→        open={!!toRemove}
+   557→        title="Remove learner?"
+   558→        description="They will lose access to this class's lessons and quizzes."
+   559→        confirmLabel="Remove"
+   560→        destructive
+   561→        onConfirm={removeLearner}
+   562→        onCancel={() => setToRemove(null)}
+   563→      />
+   564→    </div>
+   565→  )
+   566→}
+   567→
+   568→function ClassPerformance({ classId }: { classId: string }) {
+   569→  const [data, setData] = useState<any>(null)
+   570→  useEffect(() => {
+   571→    api.get(`/api/quizzes/attempts/${classId}`).catch(() => {})
+   572→    // Use the analytics/quiz per quiz results aggregated across assignments
+   573→    api.get(`/api/classes/${classId}`)
+   574→      .then(({ class: c }: any) => setData(c))
+   575→      .catch(() => {})
+   576→  }, [classId])
+   577→  // Simpler: fetch assignments and results per quiz for this class.
+   578→  // For brevity, show placeholder.
+   579→  return (
+   580→    <div className="space-y-3 text-sm">
+   581→      {data?.quizAssignments?.length === 0 ? (
+   582→        <EmptyState title="No quiz data yet" description="Once learners attempt assigned quizzes, performance will appear here." />
+   583→      ) : (
+   584→        <PerQuizPerformance classId={classId} />
+   585→      )}
+   586→    </div>
+   587→  )
+   588→}
+   589→
+   590→function PerQuizPerformance({ classId }: { classId: string }) {
+   591→  const [rows, setRows] = useState<any[]>([])
+   592→  useEffect(() => {
+   593→    api.get(`/api/classes/${classId}`).then(async ({ class: c }: any) => {
+   594→      const quizAssignments = c.quizAssignments ?? []
+   595→      const rs: any[] = []
+   596→      for (const qa of quizAssignments) {
+   597→        try {
+   598→          const r = await api.get(`/api/quizzes/${qa.quizId}/results`)
+   599→          rs.push({ quiz: r.quiz, stats: r.stats, perLearner: r.perLearner })
+   600→        } catch {}
+   601→      }
+   602→      setRows(rs)
+   603→    })
+   604→  }, [classId])
+   605→  if (rows.length === 0) return <p className="text-sm text-muted-foreground text-center py-4">No quiz results yet.</p>
+   606→  return (
+   607→    <div className="space-y-3">
+   608→      {rows.map((r) => (
+   609→        <div key={r.quiz.id} className="rounded-md border p-3">
+   610→          <div className="flex items-center justify-between mb-1">
+   611→            <div className="font-medium text-sm">{r.quiz.title}</div>
+   612→            <Badge variant="secondary">Avg {r.stats.classAverage}%</Badge>
+   613→          </div>
+   614→          <div className="text-xs text-muted-foreground">
+   615→            {r.stats.totalAttempts} attempts · Pass rate {r.stats.passRate}% · Highest {r.stats.highest}% · Lowest {r.stats.lowest}%
+   616→          </div>
+   617→          <div className="mt-2 grid gap-1">
+   618→            {r.perLearner.map((p: any) => (
+   619→              <div key={p.learner.id} className="flex items-center justify-between text-xs">
+   620→                <span>{p.learner.name}</span>
+   621→                <span>{p.highest}% ({p.latestGrade}) · {p.attempts} attempt(s)</span>
+   622→              </div>
+   623→            ))}
+   624→          </div>
+   625→        </div>
+   626→      ))}
+   627→    </div>
+   628→  )
+   629→}
+   630→
