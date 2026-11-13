@@ -108,17 +108,14 @@ export function SchoolAdminMarkSchedulesView() {
       </div>
 
       <Card>
-        <CardContent className="p-3 flex flex-col sm:flex-row gap-2">
-          <Select value={classId} onValueChange={setClassId}>
-            <SelectTrigger className="w-full sm:w-64"><SelectValue placeholder="Select class" /></SelectTrigger>
-            <SelectContent>
-              {classes.map((c) => (
-                <SelectItem key={c.id} value={c.id}>
-                  {c.name} · Grade {c.grade} · {c.subject?.name ?? '—'}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        <CardContent className="p-3 flex flex-col sm:flex-row gap-2 items-start sm:items-center">
+          <div className="flex-1 text-sm">
+            <span className="text-muted-foreground">Class: </span>
+            <span className="font-medium">{selectedClass?.name ?? '—'}</span>
+            {selectedClass?.grade && (
+              <span className="text-muted-foreground ml-2">· Grade {selectedClass.grade}</span>
+            )}
+          </div>
           <Select value={term} onValueChange={setTerm}>
             <SelectTrigger className="w-full sm:w-32"><SelectValue /></SelectTrigger>
             <SelectContent>
