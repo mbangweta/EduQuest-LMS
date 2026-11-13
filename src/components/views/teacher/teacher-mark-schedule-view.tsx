@@ -205,7 +205,6 @@ export function TeacherMarkScheduleView() {
                     {subjects.map((s) => (
                       <TableHead key={s.code} className="text-center min-w-[80px]">
                         <div className="font-medium leading-tight">{s.name}</div>
-                        <div className="text-[10px] text-muted-foreground font-normal">/{s.maxScore}</div>
                       </TableHead>
                     ))}
                     <TableHead className="text-center bg-muted/30">Total</TableHead>
