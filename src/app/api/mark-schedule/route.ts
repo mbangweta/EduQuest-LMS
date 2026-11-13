@@ -318,6 +318,24 @@ export async function GET(req: Request) {
       classInfo = cData
     }
 
+    // ---------- 6c. Sort rows by position ascending ----------
+    // Learners with a position (non-null total) appear first, in position order
+    // (1, 1, 3, 4, 4, 6…). Learners with no scores (null position) sink to the
+    // bottom, preserving their original alphabetical order among themselves.
+    rows.sort((a: any, b: any) => {
+      const ap = a.position
+      const bp = b.position
+      if (ap === null || ap === undefined) {
+        if (bp === null || bp === undefined) {
+          // Both have no position — keep alphabetical order
+          return (a.learner.name || '').localeCompare(b.learner.name || '')
+        }
+        return 1  // a sinks below b
+      }
+      if (bp === null || bp === undefined) return -1  // a rises above b
+      return ap - bp  // both have positions — sort ascending
+    })
+
     return NextResponse.json({
       class: classInfo,
       roster,
