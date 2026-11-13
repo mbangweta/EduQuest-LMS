@@ -1,13 +1,13 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { toast } from 'sonner'
 import {
   GraduationCap, Loader2, Lock, Mail, Phone, MapPin, Building2, User,
-  Upload, ArrowLeft, School, UserCircle,
+  ArrowLeft, School, UserCircle,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api-client'
+import { LogoUploader } from '@/components/views/shared/logo-uploader'
 
 const MAX_LOGO_BYTES = 100 * 1024 // 100 KB
 
@@ -35,8 +36,6 @@ type SignupValues = z.infer<typeof signupSchema>
 export function SignupView({ onBack }: { onBack?: () => void }) {
   const [submitting, setSubmitting] = useState(false)
   const [logoDataUrl, setLogoDataUrl] = useState<string>('')
-  const [logoError, setLogoError] = useState<string>('')
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const form = useForm<SignupValues>({
     resolver: zodResolver(signupSchema),
@@ -49,39 +48,7 @@ export function SignupView({ onBack }: { onBack?: () => void }) {
 
   const institutionType = form.watch('institutionType')
 
-  function handleLogoChange(e: React.ChangeEvent<HTMLInputElement>) {
-    setLogoError('')
-    const file = e.target.files?.[0]
-    if (!file) {
-      setLogoDataUrl('')
-      return
-    }
-    if (file.size > MAX_LOGO_BYTES) {
-      setLogoError(`Logo is ${Math.round(file.size / 1024)} KB — maximum is 100 KB.`)
-      e.target.value = ''
-      return
-    }
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = String(reader.result || '')
-      // Double-check size of the data URL
-      const base64Part = result.split(',')[1] || ''
-      const approxBytes = Math.ceil(base64Part.length * 0.75)
-      if (approxBytes > MAX_LOGO_BYTES) {
-        setLogoError(`Logo is ${Math.round(approxBytes / 1024)} KB when encoded — maximum is 100 KB. Try a smaller or more compressed image.`)
-        return
-      }
-      setLogoDataUrl(result)
-    }
-    reader.onerror = () => setLogoError('Failed to read the file. Please try another image.')
-    reader.readAsDataURL(file)
-  }
-
   async function onSubmit(values: SignupValues) {
-    if (logoError) {
-      toast.error(logoError)
-      return
-    }
     setSubmitting(true)
     try {
       const payload = {
@@ -90,7 +57,6 @@ export function SignupView({ onBack }: { onBack?: () => void }) {
       }
       await api.post('/api/auth/signup', payload)
       toast.success('Account created — please sign in with your new credentials.')
-      // Send the user back to the login screen
       onBack?.()
     } catch (e: any) {
       toast.error(e?.message || 'Signup failed')
@@ -291,54 +257,13 @@ export function SignupView({ onBack }: { onBack?: () => void }) {
                   </div>
                 )}
 
-                {/* Logo upload */}
-                <div className="space-y-2">
-                  <Label htmlFor="logo">
-                    {institutionType === 'SCHOOL' ? 'School logo' : 'Profile logo'}{' '}
-                    <span className="text-muted-foreground">(optional, max 100 KB)</span>
-                  </Label>
-                  <div className="flex items-center gap-3">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      <Upload className="mr-2 h-3.5 w-3.5" /> Choose file
-                    </Button>
-                    {logoDataUrl && (
-                      <img
-                        src={logoDataUrl}
-                        alt="Logo preview"
-                        className="h-12 w-12 object-contain border rounded"
-                      />
-                    )}
-                    {logoDataUrl && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setLogoDataUrl('')
-                          if (fileInputRef.current) fileInputRef.current.value = ''
-                        }}
-                      >
-                        Remove
-                      </Button>
-                    )}
-                  </div>
-                  <input
-                    ref={fileInputRef}
-                    id="logo"
-                    type="file"
-                    accept="image/png,image/jpeg,image/jpg,image/webp,image/svg+xml"
-                    className="hidden"
-                    onChange={handleLogoChange}
-                  />
-                  {logoError && (
-                    <p className="text-xs text-destructive">{logoError}</p>
-                  )}
-                </div>
+                {/* Logo uploader — shared component, 100KB validation built in */}
+                <LogoUploader
+                  initialDataUrl=""
+                  onChange={setLogoDataUrl}
+                  label={institutionType === 'SCHOOL' ? 'School logo' : 'Profile logo'}
+                  hint="Maximum file size: 100 KB. PNG, JPG, WebP, or SVG. You can also add or change this later from School Settings."
+                />
 
                 <Button type="submit" className="w-full" disabled={submitting}>
                   {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -362,3 +287,4 @@ export function SignupView({ onBack }: { onBack?: () => void }) {
     </div>
   )
 }
+

@@ -100,7 +100,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ learnerI
 
     // 1. Learner profile
     const { data: learner, error: lErr } = await sb.from('profiles')
-      .select('id, name, email, grade, school_id, school:schools(id, name, code, motto, address, phone, email, website, logo_url)')
+      .select('id, name, email, grade, school_id, school:schools(id, name, code, motto, address, phone, secondary_phone, email, website, logo_url)')
       .eq('id', learnerId).eq('role', 'LEARNER').single()
     if (lErr || !learner) return NextResponse.json({ error: 'Learner not found' }, { status: 404 })
 
@@ -140,6 +140,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ learnerI
       motto: school.motto || '',
       address: school.address || '',
       phone: school.phone || '',
+      secondaryPhone: school.secondary_phone || '',
       email: school.email || '',
       website: school.website || '',
       logoUrl: school.logo_url || '',

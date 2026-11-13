@@ -326,10 +326,11 @@ export function ReportCardDocument({ report }: { report: any }) {
             <>
               <p style={{ fontWeight: 600, margin: '0 0 2px 0' }}>{school.name}</p>
               {school.address && <p style={{ margin: 0 }}>{school.address}</p>}
-              {(school.phone || school.email) && (
+              {(school.phone || school.secondaryPhone || school.email) && (
                 <p style={{ margin: 0 }}>
                   {school.phone && `Tel: ${school.phone}`}
-                  {school.phone && school.email && ' | '}
+                  {school.phone && school.secondaryPhone && ` | ${school.secondaryPhone}`}
+                  {(school.phone || school.secondaryPhone) && school.email && ' | '}
                   {school.email && `Email: ${school.email}`}
                 </p>
               )}

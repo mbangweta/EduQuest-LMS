@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { Save, Loader2, Building2, Mail, Phone, MapPin, Globe, ImageIcon, Quote } from 'lucide-react'
+import { Save, Loader2, Building2, Mail, Phone, MapPin, Globe, Quote } from 'lucide-react'
 
 import { api } from '@/lib/api-client'
 import { useCurrentUser } from '@/hooks/use-current-user'
@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
+import { LogoUploader } from '@/components/views/shared/logo-uploader'
 
 export function SchoolAdminSettingsView() {
   const { user } = useCurrentUser()
@@ -23,10 +24,15 @@ export function SchoolAdminSettingsView() {
   const [code, setCode] = useState('')
   const [address, setAddress] = useState('')
   const [phone, setPhone] = useState('')
+  const [secondaryPhone, setSecondaryPhone] = useState('')
   const [email, setEmail] = useState('')
   const [motto, setMotto] = useState('')
   const [website, setWebsite] = useState('')
-  const [logoUrl, setLogoUrl] = useState('')
+  const [logoDataUrl, setLogoDataUrl] = useState('')
+  // Tracks whether the user picked a NEW logo file in this session.
+  // If they didn't, we don't send logo_url in the PATCH (so the existing
+  // value in the DB is preserved).
+  const [logoChanged, setLogoChanged] = useState(false)
 
   useEffect(() => {
     if (!user?.schoolId) return
@@ -38,10 +44,12 @@ export function SchoolAdminSettingsView() {
         setCode(r.school.code ?? '')
         setAddress(r.school.address ?? '')
         setPhone(r.school.phone ?? '')
+        setSecondaryPhone(r.school.secondary_phone ?? '')
         setEmail(r.school.email ?? '')
         setMotto(r.school.motto ?? '')
         setWebsite(r.school.website ?? '')
-        setLogoUrl(r.school.logo_url ?? '')
+        setLogoDataUrl(r.school.logo_url ?? '')
+        setLogoChanged(false)
       })
       .catch((e) => toast.error(e?.message || 'Failed to load school'))
       .finally(() => setLoading(false))
@@ -54,16 +62,24 @@ export function SchoolAdminSettingsView() {
     }
     setSaving(true)
     try {
-      await api.patch(`/api/schools/${user.schoolId}`, {
+      const patch: Record<string, any> = {
         name,
         address: address || undefined,
         phone: phone || undefined,
+        secondary_phone: secondaryPhone || undefined,
         email: email || undefined,
         motto: motto || undefined,
         website: website || undefined,
-        logo_url: logoUrl || undefined,
-      })
+      }
+      // Only send logo_url if the user picked a new file (or explicitly removed it).
+      // This avoids overwriting a stored logo with empty when the user just
+      // edits other fields.
+      if (logoChanged) {
+        patch.logo_url = logoDataUrl || null
+      }
+      await api.patch(`/api/schools/${user.schoolId}`, patch)
       toast.success('Settings saved')
+      setLogoChanged(false)
     } catch (e: any) {
       toast.error(e?.message || 'Save failed')
     } finally {
@@ -87,6 +103,7 @@ export function SchoolAdminSettingsView() {
         </h1>
         <p className="text-sm text-muted-foreground">
           Update the details for your school. The code is read-only — contact a Super User to change it.
+          All details appear on every learner&apos;s report card.
         </p>
       </div>
 
@@ -115,47 +132,58 @@ export function SchoolAdminSettingsView() {
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="address" className="flex items-center gap-1">
-                <MapPin className="h-3 w-3" /> Address
+                <MapPin className="h-3 w-3" /> Physical Address
               </Label>
-              <Input id="address" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Street, city" />
+              <Input id="address" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Plot 12, Education Road, Lusaka, Zambia" />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="phone" className="flex items-center gap-1">
-                  <Phone className="h-3 w-3" /> Phone
+                  <Phone className="h-3 w-3" /> Primary Phone
                 </Label>
-                <Input id="phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
+                <Input id="phone" type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+260 97 123 4567" />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="email" className="flex items-center gap-1">
-                  <Mail className="h-3 w-3" /> Email
+                <Label htmlFor="secondaryPhone" className="flex items-center gap-1">
+                  <Phone className="h-3 w-3" /> Secondary Phone <span className="text-muted-foreground font-normal">(optional)</span>
                 </Label>
-                <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+                <Input id="secondaryPhone" type="tel" value={secondaryPhone} onChange={(e) => setSecondaryPhone(e.target.value)} placeholder="+260 95 987 6543" />
               </div>
             </div>
             <div className="space-y-1.5">
+              <Label htmlFor="email" className="flex items-center gap-1">
+                <Mail className="h-3 w-3" /> Email
+              </Label>
+              <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
               <Label htmlFor="motto" className="flex items-center gap-1">
-                <Quote className="h-3 w-3" /> School Motto
+                <Quote className="h-3 w-3" /> School Motto <span className="text-muted-foreground font-normal">(optional)</span>
               </Label>
               <Input id="motto" value={motto} onChange={(e) => setMotto(e.target.value)} placeholder="e.g. Towards A Brighter Future" />
               <p className="text-xs text-muted-foreground">Appears at the top of every report card.</p>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="website" className="flex items-center gap-1">
-                  <Globe className="h-3 w-3" /> Website
-                </Label>
-                <Input id="website" value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="www.yourschool.com" />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="logoUrl" className="flex items-center gap-1">
-                  <ImageIcon className="h-3 w-3" /> Logo URL
-                </Label>
-                <Input id="logoUrl" value={logoUrl} onChange={(e) => setLogoUrl(e.target.value)} placeholder="https://…/logo.png" />
-              </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="website" className="flex items-center gap-1">
+                <Globe className="h-3 w-3" /> Website <span className="text-muted-foreground font-normal">(optional)</span>
+              </Label>
+              <Input id="website" value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="www.yourschool.com" />
             </div>
+
+            {/* Logo uploader — replaces the old URL text field */}
+            <LogoUploader
+              initialDataUrl={logoDataUrl}
+              onChange={(newDataUrl) => {
+                setLogoDataUrl(newDataUrl)
+                setLogoChanged(true)
+              }}
+              label="School Logo"
+              hint="Maximum file size: 100 KB. PNG, JPG, WebP, or SVG. You can add or change this anytime — the logo appears at the top-right of every report card and as a faded watermark behind the document."
+            />
+
             <p className="text-xs text-muted-foreground">
-              These details appear on every learner&apos;s report card — each school has its own motto, address, phone, email, and website.
+              These details appear on every learner&apos;s report card — each school has its own
+              name, motto, address, phones, email, website, and logo.
             </p>
             <div className="flex justify-end pt-2">
               <Button onClick={save} disabled={saving}>
@@ -169,3 +197,4 @@ export function SchoolAdminSettingsView() {
     </div>
   )
 }
+
