@@ -256,10 +256,11 @@ export function SchoolAdminMarkSchedulesView() {
                       </TableRow>
                     )
                   })}
-                  {/* === Class averages row (bottom) === */}
+                  {/* === Average row (bottom) === */}
                   <TableRow className="border-t-2 border-gray-400 bg-muted/40 font-semibold">
-                    <TableCell className="sticky left-0 bg-muted/40 z-10 text-center text-muted-foreground" colSpan={2}>
-                      <span className="italic">Class Average</span>
+                    <TableCell className="sticky left-0 bg-muted/40 z-10 text-center text-muted-foreground"></TableCell>
+                    <TableCell className="sticky left-10 bg-muted/40 z-10 italic">
+                      Average
                     </TableCell>
                     {subjects.map((s) => {
                       const avg = data?.classAverages?.bySubject?.[s.code]
