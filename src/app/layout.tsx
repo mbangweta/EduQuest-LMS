@@ -20,9 +20,23 @@ export const metadata: Metadata = {
   description: "EduQuest LMS — A modern Learning Management System built for Zambian schools. Fully aligned with the Zambian curriculum and ECZ examination standards.",
   keywords: ["EduQuest", "LMS", "Zambia", "ECZ", "education", "e-learning", "primary school", "secondary school", "quizzes", "lessons"],
   authors: [{ name: "EduQuest" }],
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "EduQuest LMS",
+  },
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+    apple: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
+};
+
+export const viewport = {
+  themeColor: "#2563eb",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 5,
 };
 
 export default function RootLayout({
