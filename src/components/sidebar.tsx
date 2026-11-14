@@ -30,6 +30,7 @@ const SCHOOL_ADMIN_NAV: NavItem[] = [
   { label: 'Classes', view: 'school-admin.classes', icon: <BookOpen className="h-4 w-4" /> },
   { label: 'Learners', view: 'school-admin.learners', icon: <Users className="h-4 w-4" /> },
   { label: 'Mark Schedules', view: 'school-admin.mark-schedules', icon: <ClipboardCheck className="h-4 w-4" /> },
+  { label: 'Analytics', view: 'school-admin.analytics', icon: <BarChart3 className="h-4 w-4" /> },
   { label: 'Report Cards', view: 'school-admin.report-cards', icon: <Award className="h-4 w-4" /> },
   { label: 'Promote Learners', view: 'school-admin.promote', icon: <ArrowUpCircle className="h-4 w-4" /> },
   { label: 'Library', view: 'school-admin.library', icon: <Library className="h-4 w-4" /> },
@@ -53,6 +54,7 @@ const TEACHER_NAV: NavItem[] = [
   { label: 'Report Cards', view: 'teacher.report-cards', icon: <Award className="h-4 w-4" /> },
   { label: 'Question Bank', view: 'teacher.question-bank', icon: <Library className="h-4 w-4" /> },
   { label: 'Results', view: 'teacher.results', icon: <BarChart3 className="h-4 w-4" /> },
+  { label: 'Analytics', view: 'teacher.analytics', icon: <BarChart3 className="h-4 w-4" /> },
   { label: 'Library', view: 'teacher.library', icon: <Library className="h-4 w-4" /> },
   { label: 'Announcements', view: 'teacher.announcements', icon: <Megaphone className="h-4 w-4" /> },
 ]

@@ -45,6 +45,7 @@ import { SchoolAdminSettingsView } from '@/components/views/school-admin/school-
 import { SchoolAdminPromoteView } from '@/components/views/school-admin/school-admin-promote-view'
 import { SchoolAdminTeacherWorkloadView } from '@/components/views/school-admin/school-admin-teacher-workload-view'
 import { SchoolAdminMarkSchedulesView } from '@/components/views/school-admin/school-admin-mark-schedules-view'
+import { AnalyticsDashboard } from '@/components/views/shared/analytics-dashboard'
 import { SchoolAdminReportCardsView } from '@/components/views/school-admin/school-admin-report-cards-view'
 import { AcademicYearsView } from '@/components/views/shared/academic-years-view'
 import { AuditLogsView } from '@/components/views/shared/audit-logs-view'
@@ -74,6 +75,7 @@ export function ViewRenderer() {
   if (view === 'school-admin.learners') return <SchoolAdminLearnersView />
   if (view === 'school-admin.promote') return <SchoolAdminPromoteView />
   if (view === 'school-admin.mark-schedules') return <SchoolAdminMarkSchedulesView />
+  if (view === 'school-admin.analytics') return <AnalyticsDashboard role="SCHOOL_ADMIN" />
   if (view === 'school-admin.report-cards') return <SchoolAdminReportCardsView />
   if (view === 'school-admin.library') return <LibraryView scope="school-admin" />
   if (view === 'school-admin.academic-years') return <AcademicYearsView />
@@ -113,6 +115,7 @@ export function ViewRenderer() {
   if (view === 'teacher.assessment-editor') return <TeacherAssessmentEditorView assessmentId={params.assessmentId} />
   if (view === 'teacher.mark-schedule') return <TeacherMarkScheduleView />
   if (view === 'teacher.attendance') return <TeacherAttendanceView />
+  if (view === 'teacher.analytics') return <AnalyticsDashboard role="TEACHER" />
   if (view === 'teacher.report-cards') return <TeacherReportCardsView />
 
   // LEARNER views (existing)
