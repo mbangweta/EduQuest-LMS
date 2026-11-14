@@ -1,6 +1,6 @@
 'use client'
 
-import { GraduationCap, LayoutDashboard, Users, Settings, BookOpen, FileText, FileQuestion, Library, BarChart3, FolderOpen, ClipboardList, School, CalendarDays, ArrowUpCircle, Briefcase, ScrollText, Megaphone, ClipboardCheck, Award, CalendarCheck } from 'lucide-react'
+import { GraduationCap, LayoutDashboard, Users, Settings, BookOpen, FileText, FileQuestion, Library, BarChart3, FolderOpen, ClipboardList, School, CalendarDays, ArrowUpCircle, Briefcase, ScrollText, Megaphone, ClipboardCheck, Award, CalendarCheck, NotebookPen } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useRouter } from '@/lib/router'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -51,6 +51,7 @@ const TEACHER_NAV: NavItem[] = [
   { label: 'Assessments', view: 'teacher.assessments', icon: <ClipboardList className="h-4 w-4" /> },
   { label: 'Mark Schedule', view: 'teacher.mark-schedule', icon: <ClipboardCheck className="h-4 w-4" /> },
   { label: 'Attendance', view: 'teacher.attendance', icon: <CalendarCheck className="h-4 w-4" /> },
+  { label: 'Assignments', view: 'teacher.assignments', icon: <NotebookPen className="h-4 w-4" /> },
   { label: 'Report Cards', view: 'teacher.report-cards', icon: <Award className="h-4 w-4" /> },
   { label: 'Question Bank', view: 'teacher.question-bank', icon: <Library className="h-4 w-4" /> },
   { label: 'Results', view: 'teacher.results', icon: <BarChart3 className="h-4 w-4" /> },

@@ -19,6 +19,7 @@ import { TeacherAssessmentsView } from '@/components/views/teacher/teacher-asses
 import { TeacherAssessmentEditorView } from '@/components/views/teacher/teacher-assessment-editor-view'
 import { TeacherMarkScheduleView } from '@/components/views/teacher/teacher-mark-schedule-view'
 import { TeacherAttendanceView } from '@/components/views/teacher/teacher-attendance-view'
+import { TeacherAssignmentsView } from '@/components/views/teacher/teacher-assignments-view'
 import { TeacherReportCardsView } from '@/components/views/teacher/teacher-report-cards-view'
 import { LearnerDashboard } from '@/components/views/learner/learner-dashboard'
 import { LearnerClassesView } from '@/components/views/learner/learner-classes-view'
@@ -115,6 +116,7 @@ export function ViewRenderer() {
   if (view === 'teacher.assessment-editor') return <TeacherAssessmentEditorView assessmentId={params.assessmentId} />
   if (view === 'teacher.mark-schedule') return <TeacherMarkScheduleView />
   if (view === 'teacher.attendance') return <TeacherAttendanceView />
+  if (view === 'teacher.assignments') return <TeacherAssignmentsView />
   if (view === 'teacher.analytics') return <AnalyticsDashboard role="TEACHER" />
   if (view === 'teacher.report-cards') return <TeacherReportCardsView />
 
