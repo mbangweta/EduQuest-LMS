@@ -6,6 +6,7 @@ import { useRouter } from '@/lib/router'
 import { useCurrentUser } from '@/hooks/use-current-user'
 import { Sidebar } from '@/components/sidebar'
 import { NotificationsBell } from '@/components/notifications-bell'
+import { ThemeToggle } from '@/components/theme-toggle'
 import { UserAvatar } from '@/components/views/shared/user-avatar'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -160,6 +161,7 @@ export function AppShell() {
         </div>
 
         <div className="flex items-center gap-1 sm:gap-2">
+          <ThemeToggle />
           <NotificationsBell />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
