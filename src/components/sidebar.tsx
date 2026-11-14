@@ -1,6 +1,6 @@
 'use client'
 
-import { GraduationCap, LayoutDashboard, Users, Settings, BookOpen, FileText, FileQuestion, Library, BarChart3, FolderOpen, ClipboardList, School, CalendarDays, ArrowUpCircle, Briefcase, ScrollText, Megaphone, ClipboardCheck, Award, CalendarCheck, NotebookPen } from 'lucide-react'
+import { GraduationCap, LayoutDashboard, Users, Settings, BookOpen, FileText, FileQuestion, Library, BarChart3, FolderOpen, ClipboardList, School, CalendarDays, ArrowUpCircle, Briefcase, ScrollText, Megaphone, ClipboardCheck, Award, CalendarCheck, NotebookPen, Trophy } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useRouter } from '@/lib/router'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -31,6 +31,7 @@ const SCHOOL_ADMIN_NAV: NavItem[] = [
   { label: 'Learners', view: 'school-admin.learners', icon: <Users className="h-4 w-4" /> },
   { label: 'Mark Schedules', view: 'school-admin.mark-schedules', icon: <ClipboardCheck className="h-4 w-4" /> },
   { label: 'Analytics', view: 'school-admin.analytics', icon: <BarChart3 className="h-4 w-4" /> },
+  { label: 'Leaderboard', view: 'school-admin.leaderboard', icon: <Trophy className="h-4 w-4" /> },
   { label: 'Report Cards', view: 'school-admin.report-cards', icon: <Award className="h-4 w-4" /> },
   { label: 'Promote Learners', view: 'school-admin.promote', icon: <ArrowUpCircle className="h-4 w-4" /> },
   { label: 'Library', view: 'school-admin.library', icon: <Library className="h-4 w-4" /> },
@@ -56,6 +57,7 @@ const TEACHER_NAV: NavItem[] = [
   { label: 'Question Bank', view: 'teacher.question-bank', icon: <Library className="h-4 w-4" /> },
   { label: 'Results', view: 'teacher.results', icon: <BarChart3 className="h-4 w-4" /> },
   { label: 'Analytics', view: 'teacher.analytics', icon: <BarChart3 className="h-4 w-4" /> },
+  { label: 'Leaderboard', view: 'teacher.leaderboard', icon: <Trophy className="h-4 w-4" /> },
   { label: 'Library', view: 'teacher.library', icon: <Library className="h-4 w-4" /> },
   { label: 'Announcements', view: 'teacher.announcements', icon: <Megaphone className="h-4 w-4" /> },
 ]

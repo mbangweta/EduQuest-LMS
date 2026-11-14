@@ -47,6 +47,7 @@ import { SchoolAdminPromoteView } from '@/components/views/school-admin/school-a
 import { SchoolAdminTeacherWorkloadView } from '@/components/views/school-admin/school-admin-teacher-workload-view'
 import { SchoolAdminMarkSchedulesView } from '@/components/views/school-admin/school-admin-mark-schedules-view'
 import { AnalyticsDashboard } from '@/components/views/shared/analytics-dashboard'
+import { GamificationView } from '@/components/views/shared/gamification-view'
 import { SchoolAdminReportCardsView } from '@/components/views/school-admin/school-admin-report-cards-view'
 import { AcademicYearsView } from '@/components/views/shared/academic-years-view'
 import { AuditLogsView } from '@/components/views/shared/audit-logs-view'
@@ -118,6 +119,8 @@ export function ViewRenderer() {
   if (view === 'teacher.attendance') return <TeacherAttendanceView />
   if (view === 'teacher.assignments') return <TeacherAssignmentsView />
   if (view === 'teacher.analytics') return <AnalyticsDashboard role="TEACHER" />
+  if (view === 'teacher.leaderboard') return <GamificationView />
+  if (view === 'school-admin.leaderboard') return <GamificationView />
   if (view === 'teacher.report-cards') return <TeacherReportCardsView />
 
   // LEARNER views (existing)
